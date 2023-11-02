@@ -14,11 +14,15 @@ class Trip:
         self.stops : dict = {} # dict format: {stop_id: (stop, ArrivalTime)}
         self.stop_list : list[(Stop, ArrivalTime)] = []
     
-    def get_stop_list(self):
-        """Return list[(Stop, ArrivalTime)] sorted by arrival time"""
-        stop_list = [x[1] for x in self.stops.items()]
-        stop_list.sort(key=lambda x: x[1].time_seconds)
-        return stop_list
+    def compute_stop_list(self):
+        """Compute list[(Stop, ArrivalTime)] sorted by arrival time"""
+        self.stop_list = [x[1] for x in self.stops.items()]
+        self.stop_list.sort(key=lambda x: x[1].time_seconds)
+    
+    def compute_graph_with_time(self):
+        self.compute_stop_list()
+
+
     
     @classmethod
     def parse_metro_trip_short_name_from_id(cls, id):

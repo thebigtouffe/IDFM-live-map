@@ -59,10 +59,11 @@ class PRIM_API:
         print("Downloading network...")
         self.__download_data(url, self.NETWORK_DATA_FILE_PATH)
 
-    def __load_line(self, data):
+    def __load_line_segment(self, data):
         id = data["fields"]["idrefligc"]
         segment = data["fields"]["geo_shape"]["coordinates"]
 
+        # Add each line segment to segment attribute of Line instance
         if not id in self.lines.keys():
             name = data["fields"]["res_com"]
             company = data["fields"]["exploitant"]
@@ -82,7 +83,11 @@ class PRIM_API:
             # Parse JSON data into a class instance
             print(f"Loaded {len(json_data)} objects from {file_path}")
             for data in json_data:
-                self.__load_line(data)
+                self.__load_line_segment(data)
+            
+            # Compute line graph from segments
+            for id, line in self.lines.items():
+                line.compute_graph()
 
         except FileNotFoundError:
             print("Error: File not found.")
@@ -110,6 +115,8 @@ class PRIM_API:
             if line_id in self.lines.keys():
                 line = self.lines[line_id]
                 stop = Stop(id, company, name, lon, lat, city, line)
+                stop.get_nearest_point_on_graph()
+                stop.get_line_graph_segment()
                 self.stops[id] = stop
     
     def load_stops(self, file_path=STOPS_DATA_FILE_PATH):
