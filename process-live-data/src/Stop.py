@@ -11,6 +11,7 @@ class Stop:
         self.position = Point(lon, lat)
         self.city = city
         self.line : Line = line
+        self.ridership = 0
 
     def __repr__(self):
         return f"{self.name} ({self.line.name})"
@@ -31,3 +32,7 @@ class Stop:
             self.segment_idx = min(enumerate(distances), key=lambda x: x[1])[0]
         else:
             self.segment_idx = 0
+    
+    def estimate_waiting_time(self):
+        """Estimate the time spent waiting for passengers at station based on ridership and time of the day"""
+        return 10

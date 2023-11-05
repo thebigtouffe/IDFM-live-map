@@ -69,10 +69,9 @@ class PRIM_API:
             company = data["fields"]["exploitant"]
             transportation_type = data["fields"]["mode"]
             
-            line = Line(id, name, company, transportation_type, segments=[segment])
+            line = Line(id, name, company, transportation_type)
             self.lines[id] = line
-        else:
-            self.lines[id].segments.append(segment) 
+        self.lines[id].segments.append(segment) 
 
     def load_network(self, file_path=NETWORK_DATA_FILE_PATH):
         try:
@@ -88,6 +87,11 @@ class PRIM_API:
             # Compute line graph from segments
             for id, line in self.lines.items():
                 line.compute_graph()
+                print(line.id, line)
+                print(line.graph.geometryType())
+                print("")
+                if line.graph.geometryType() == "MultiLineString":
+                    line.compute_shortest_paths()
 
         except FileNotFoundError:
             print("Error: File not found.")

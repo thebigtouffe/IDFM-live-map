@@ -1,2 +1,4 @@
 requests
 shapely
+networkx
+numpy

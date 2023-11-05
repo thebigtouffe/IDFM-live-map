@@ -18,13 +18,29 @@ if __name__ == '__main__':
     prim.load_network()
     prim.load_stops()
 
-    # Test SNCF
-    stop=prim.stops['IDFM:monomodalStopPlace:46725']
-    d1 = prim.get_arrival_times_by_stop(stop)
+    # # Test SNCF
+    # stop=prim.stops['IDFM:monomodalStopPlace:46725']
+    # d1 = prim.get_arrival_times_by_stop(stop)
 
-    # Test metro
-    prim.get_arrival_times_by_stop(prim.stops['IDFM:22227'])
-    prim.get_arrival_times_by_stop(prim.stops['IDFM:462975'])
-    prim.get_arrival_times_by_stop(prim.stops['IDFM:478395'])
+    # # Test metro
+    # prim.get_arrival_times_by_stop(prim.stops['IDFM:22227'])
+    # prim.get_arrival_times_by_stop(prim.stops['IDFM:462975'])
+    # prim.get_arrival_times_by_stop(prim.stops['IDFM:478395'])
 
-    prim.get_arrival_times()
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:22034'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:22023'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:463250'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:463210'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:22028'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:463069'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:463316'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:21902'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:463250'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:22022'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:463286'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:22033'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:22032'])
+    prim.get_arrival_times_by_stop(prim.stops['IDFM:462987'])
+
+
+    # prim.get_arrival_times()
