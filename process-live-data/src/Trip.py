@@ -2,6 +2,7 @@ from src.Stop import Stop
 from src.Line import Line
 from src.ArrivalTime import ArrivalTime
 
+from shapely import LineString
 from shapely.ops import linemerge, substring
 import re
 
@@ -31,13 +32,39 @@ class Trip:
 
             if line.graph.geometryType() == "MultiLineString":
                 segment_indices = line.shortest_paths[stop1.segment_idx][stop2.segment_idx]
-                segment = linemerge([line.graph.geoms[i] for i in segment_indices])
+                segment = []
+
+                first_segment_start_idx = line.graph.geoms[0].coords[:].index(stop1.position_on_graph.coords[0])
+                intermediates_points_idx = []
+                for i in range(len(segment_indices)):
+                    left = line.graph.geoms[i]
+                    right = line.graph.geoms[i+1]
+
+                    left_point_idx = left.coords[:].index((left.intersection(right)).coords[0])
+                    right_point_idx = right.coords[:].index((right.intersection(left)).coords[0])
+
+                    intermediates_points_idx.append(left_point_idx)
+                    intermediates_points_idx.append(right_point_idx)
+                last_segment_end_idx = line.graph.geoms[-1].coords[:].stop2.position_on_graph.coords[0]
+                points_idx = [first_segment_start_idx, *intermediates_points_idx, last_segment_end_idx]
+                points_idx = [(points_idx[i], points_idx[i+1]) for i in range(0, len(points_idx2), 2)]
+
+                for i in range(segment_indices):
+                    s_i = line.graph.geoms[i]
+                    start, end = points_idx[i]
+                    if start > end:
+                        segment.append(s_i[start:end:-1])
+                    else:
+                        segment.append(s_i[start:end:1])
+                
+                segment = LineString(*segment)
+            
             else:
                 segment = line.graph
-
-            start_distance = segment.project(stop1.position_on_graph)
-            end_distance = segment.project(stop2.position_on_graph)
-            segment = substring(segment, start_distance, end_distance)
+                start_distance = segment.project(stop1.position_on_graph)
+                end_distance = segment.project(stop2.position_on_graph)
+                segment = substring(segment, start_distance, end_distance)
+            
             print(segment)
 
             # Animate using 10 point interpolation
