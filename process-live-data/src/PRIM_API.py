@@ -88,10 +88,10 @@ class PRIM_API:
             for id, line in self.lines.items():
                 line.compute_graph()
                 print(line.id, line)
-                print(line.graph.geometryType())
+                print(line.graph.geom_type)
                 print("")
-                if line.graph.geometryType() == "MultiLineString":
-                    line.compute_shortest_paths()
+                if line.graph.geom_type == "MultiLineString":
+                    line.compute_segment_shortest_paths()
 
         except FileNotFoundError:
             print("Error: File not found.")
