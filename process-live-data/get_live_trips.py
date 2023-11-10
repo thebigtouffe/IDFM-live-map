@@ -4,7 +4,7 @@ import geopandas as gpd
 import pandas as pd
 import networkx as nx
 from shapely import LineString, Point
-from shapely.ops import nearest_points
+from shapely.ops import nearest_points, linemerge
 import matplotlib.pyplot as plt
 import momepy
 
@@ -64,13 +64,19 @@ stops_df.line_id = stops_df.line_id.apply(lambda x: x.split(":")[-1])
 stops_df = stops_df[stops_df.line_id.isin(network_df.id)]
 stops_df = gpd.GeoDataFrame(stops_df, geometry=gpd.points_from_xy(stops_df.longitude, stops_df.latitude))
 
-line_names = set(network_df.name.values)
+# Iterate over each line
+line_names = list(set(network_df.name.values))
+# for name in line_names:
+for name in ['RER D']:
+    print(name)
+    line = network_df[network_df.name == name].copy()
+    line_stops=stops_df[stops_df.line_id == line.id.iloc[0]].copy()
 
-for name in list(line_names):
-    line = network_df[network_df.name == name]
-    line_stops=stops_df[stops_df.line_id == line.id.iloc[0]]
-
+    # Compute network graph from geospatial data
     G = momepy.gdf_to_nx(line, approach="primal")
+    nodes = list(G.nodes)
+
+    # Get nodes as geodataframe
     nodes_gdf = momepy.nx_to_gdf(G, points=True, lines=False, spatial_weights=True)[0]
     nodes_position = nodes_gdf.geometry.unary_union
 
@@ -79,17 +85,67 @@ for name in list(line_names):
         nearest = nodes_gdf.geometry == nearest_points(point, nodes_position)[1]
         return nodes_gdf[nearest].nodeID.values[0]
 
+    # Compute nearest node on graph for each stop
     line_stops['nearest_node_on_graph'] = line_stops.apply(lambda row: nearest_node(row.geometry), axis=1)
 
-    positions = {n: [n[0], n[1]] for n in list(G.nodes)}
+    # Compute shortest paths on line graph
+    shortest_paths = nx.shortest_path(G)
 
     # Plot
+    # f, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True, sharey=True)
+    # line.plot(color="#"+line.color.iloc[0], ax=ax)
+    # line_stops.plot(color="blue", ax=ax)
+    # ax.set_title(line.name.iloc[0])
+    # nx.draw(G, {n: [n[0], n[1]] for n in nodes}, ax=ax, node_size=3)
+    # plt.show()
+
+    # Compute pairs of stops by using the cartesian product of the dataframe with itself
+    line_stops_pairs = line_stops.assign(dummy=1).merge(line_stops.assign(dummy=1), on='dummy', how='outer', suffixes=('_start', '_end'))
+    line_stops_pairs = line_stops_pairs.drop('dummy', axis=1)
+    line_stops_pairs = line_stops_pairs[line_stops_pairs.nearest_node_on_graph_start != line_stops_pairs.nearest_node_on_graph_end]
+
+    # Compute shortest path for each pair
+    line_stops_pairs['shortest_path'] = line_stops_pairs.apply(lambda row: shortest_paths[nodes[row.nearest_node_on_graph_start]][nodes[row.nearest_node_on_graph_end]], axis=1)
+    # Get the segments of the shortest path for further comparison with network dataframe
+    line_stops_pairs['shortest_path_segments'] = line_stops_pairs.apply(lambda row: [LineString(x) for x in list(zip(row.shortest_path[0:-1], row.shortest_path[1:]))], axis=1)
+
+    # Compute line network with reverse segment
+    reverse_line = line.copy()
+    reverse_line.geometry = reverse_line.reverse()
+    line = pd.concat([line, reverse_line])
+    
+    # Compute (start, end) of each line segment
+    line['start_node'] = line.geometry.apply(lambda r: r.coords[0])
+    line['end_node'] = line.geometry.apply(lambda r: r.coords[-1])
+
+    # Build a path on network using segments of the shortest path between two stops
+    def get_shortest_path_from_segments(segments, line):
+        path = []
+        for s in segments:
+            s_start_node, s_end_node = s.coords[:]
+            s_path = line[(line.start_node == s_start_node) & (line.end_node == s_end_node)].geometry.iloc[0]
+            path.append(s_path)
+        return linemerge(path)
+
+    line_stops_pairs['shortest_path'] = line_stops_pairs.shortest_path_segments.apply(lambda row: get_shortest_path_from_segments(row, line))
+
+# Plot a few shortest path
+for i in range(6):
     f, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True, sharey=True)
-    line.plot(color="#"+line.color.iloc[0], ax=ax)
-    line_stops.plot(color="blue", ax=ax)
-    ax.set_title(line.name.iloc[0])
-    nx.draw(G, positions, ax=ax, node_size=3)
+    example = line_stops_pairs.iloc[i]
+    print(example.name_start, example.name_end)
+    sp = gpd.GeoSeries(example.shortest_path)
+    sp.plot(color="red", ax=ax)
+    sp_segments = gpd.GeoSeries(linemerge(example.shortest_path_segments))
+    sp_segments.plot(color="blue", ax=ax)
     plt.show()
+
+# Build a route between two stops
+print(line_stops.name.iloc[-1])
+start_idx = line_stops.nearest_node_on_graph.iloc[-1]
+print(line_stops.name.iloc[-2])
+end_idx = line_stops.nearest_node_on_graph.iloc[-2]
+sp = shortest_paths[nodes[start_idx]][nodes[end_idx]]
 
 
 # if __name__ == '__main__':
