@@ -11,11 +11,11 @@ class PRIM_API:
 
     # Data on stops
     STOPS_DATA_URL = "https://data.iledefrance-mobilites.fr/explore/dataset/arrets-lignes/download/?format=json"
-    STOPS_DATA_FILE_PATH = "data/stops.json"
+    STOPS_DATA_FILE_PATH = "raw_data/stops.json"
 
     # Data on network (GeoJSON routes)
     NETWORK_DATA_URL = "https://data.iledefrance-mobilites.fr/explore/dataset/traces-du-reseau-ferre-idf/download/?format=json"
-    NETWORK_DATA_FILE_PATH = "data/network.json"
+    NETWORK_DATA_FILE_PATH = "raw_data/network.json"
 
     # Next trip data
     NEXT_TRIPS_BASE_URL = "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring?MonitoringRef="
