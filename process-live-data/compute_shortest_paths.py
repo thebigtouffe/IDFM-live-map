@@ -32,7 +32,7 @@ if not os.path.exists(prim.STOPS_DATA_FILE_PATH):
 
 # Load railroad network and get relevant fields
 print("Loading networks...")
-with open('data/network.json', 'r') as data:
+with open(prim.NETWORK_DATA_FILE_PATH, 'r') as data:
     network_df = pd.json_normalize(json.load(data))
 
 network_relevant_fields = {    
@@ -55,7 +55,7 @@ print("Network loaded as a GeoDataFrame.")
 
 # Load stop database and get relevant fields
 print("Loading stops...")
-with open('data/stops.json', 'r') as data:
+with open(prim.STOPS_DATA_FILE_PATH, 'r') as data:
     stops_df = pd.json_normalize(json.load(data))
 
 stops_relevant_fields = {    
@@ -81,6 +81,7 @@ print("Stops loaded as a GeoDataFrame.")
 # Iterate over each line
 line_names = list(set(network_df.name.values))
 # line_names = ['METRO 13']
+all_line_stops_pairs = []
 for name in line_names:
     print(f"\n-------\nComputing data for {name}.")
     line = network_df[network_df.name == name].copy()
@@ -134,15 +135,15 @@ for name in line_names:
     line_stops['nearest_node_on_graph'] = line_stops.apply(lambda row: nearest_node(row.geometry), axis=1)
 
     # Plot
-    f, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True, sharey=True)
-    line.plot(color="#"+line.color.iloc[0], ax=ax)
-    line_stops.plot(color="blue", ax=ax)
-    ax.set_title(line.name.iloc[0])
-    nx.draw(G, {n: [n[0], n[1]] for n in nodes}, ax=ax, node_size=3)
-    plt.show()
+    # f, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True, sharey=True)
+    # line.plot(color="#"+line.color.iloc[0], ax=ax)
+    # line_stops.plot(color="blue", ax=ax)
+    # ax.set_title(line.name.iloc[0])
+    # nx.draw(G, {n: [n[0], n[1]] for n in nodes}, ax=ax, node_size=3)
+    # plt.show()
 
     # Compute shortest paths on line graph
-    print("Computing shortest paths on network graph for each pairs of stops...")
+    print("Computing shortest paths on network graph for each pair of stops...")
     shortest_paths = nx.shortest_path(G)
 
     # Compute pairs of stops by using the cartesian product of the dataframe with itself
@@ -162,7 +163,7 @@ for name in line_names:
     reverse_line.geometry = reverse_line.reverse()
     line = pd.concat([line, reverse_line])
 
-    print("Building actual paths for each pairs...")
+    print("Building actual paths for every pair...")
     
     # Compute (start, end) of each line segment
     line['start_node'] = line.geometry.apply(lambda r: r.coords[0])
@@ -178,9 +179,29 @@ for name in line_names:
         return linemerge(path)
 
     line_stops_pairs['shortest_path'] = line_stops_pairs.shortest_path_segments.apply(lambda row: get_shortest_path_from_segments(row, line))
+    all_line_stops_pairs.append(line_stops_pairs)
 
     print("Shortest paths computed.")
     print("-------")
+
+# Export data
+print("Exporting processed network data.")
+network_df.to_file("data/network.json", driver="GeoJSON")
+
+print("Exporting stop database.")
+stops_df.to_file("data/stops.json", driver="GeoJSON")
+
+print("Exporting shortest paths.")
+all_line_stops_pairs = pd.concat(all_line_stops_pairs)
+line_stops_pairs_labels_to_export = [
+    'id_start',
+    'id_end',
+    'shortest_path',
+]
+all_line_stops_pairs = all_line_stops_pairs[line_stops_pairs_labels_to_export]
+all_line_stops_pairs = gpd.GeoDataFrame(all_line_stops_pairs)
+all_line_stops_pairs = all_line_stops_pairs.set_geometry("shortest_path")
+all_line_stops_pairs.to_file("data/shortest_paths.json", driver="GeoJSON")
 
 # Plot a few shortest path
 # for i in random.sample(range(len(line_stops_pairs)), 6):
