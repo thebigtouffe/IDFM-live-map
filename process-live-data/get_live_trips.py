@@ -1,12 +1,18 @@
 import os
 import json
+
 import geopandas as gpd
 import pandas as pd
 import networkx as nx
-from shapely import LineString, Point
-from shapely.ops import nearest_points, linemerge
-import matplotlib.pyplot as plt
 import momepy
+
+from shapely import LineString, Point, MultiPoint
+from shapely.ops import nearest_points, linemerge
+
+import matplotlib.pyplot as plt
+
+from itertools import combinations
+import random
 
 from src.PRIM_API import PRIM_API
 
@@ -66,15 +72,45 @@ stops_df = gpd.GeoDataFrame(stops_df, geometry=gpd.points_from_xy(stops_df.longi
 
 # Iterate over each line
 line_names = list(set(network_df.name.values))
-# for name in line_names:
-for name in ['RER D']:
-    print(name)
+for name in line_names:
+# for name in ['METRO 13']:
+    print(f"Computing data for {name}.")
     line = network_df[network_df.name == name].copy()
     line_stops=stops_df[stops_df.line_id == line.id.iloc[0]].copy()
 
     # Compute network graph from geospatial data
+    print("Computing graph...")
     G = momepy.gdf_to_nx(line, approach="primal")
     nodes = list(G.nodes)
+
+    # Network graph is sometimes not connected due to data error
+    if not nx.is_connected(G):
+        print("Graph not connected!")
+        graph_components = list(nx.connected_components(G))
+
+        # Get pairs of disconnected subgraphes
+        segments = []
+        for pair in list(combinations(graph_components, 2)):
+            x = MultiPoint(list(pair[0]))
+            y = MultiPoint(list(pair[1]))
+            distance = x.distance(y)
+
+            # Create the shortest segment linking subgraphes nodes
+            if distance > 0.0 and distance < 1e-3:
+                node1, node2 = nearest_points(x, y)
+                segment = LineString([node1, node2])
+                segments.append(segment)
+                
+        new_rows = line.head(len(segments)).copy()
+        new_rows.geometry = segments
+        line = pd.concat([line, new_rows])
+
+        # Recompute network graph
+        G = momepy.gdf_to_nx(line, approach="primal")
+        nodes = list(G.nodes)
+        if nx.is_connected(G):
+            print("Network graph artificially connected.")
+            print(f"Added segments: {segments}")
 
     # Get nodes as geodataframe
     nodes_gdf = momepy.nx_to_gdf(G, points=True, lines=False, spatial_weights=True)[0]
@@ -86,23 +122,26 @@ for name in ['RER D']:
         return nodes_gdf[nearest].nodeID.values[0]
 
     # Compute nearest node on graph for each stop
+    print("Computing nearest node on graph for each stop.")
     line_stops['nearest_node_on_graph'] = line_stops.apply(lambda row: nearest_node(row.geometry), axis=1)
 
-    # Compute shortest paths on line graph
-    shortest_paths = nx.shortest_path(G)
-
     # Plot
-    # f, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True, sharey=True)
-    # line.plot(color="#"+line.color.iloc[0], ax=ax)
-    # line_stops.plot(color="blue", ax=ax)
-    # ax.set_title(line.name.iloc[0])
-    # nx.draw(G, {n: [n[0], n[1]] for n in nodes}, ax=ax, node_size=3)
-    # plt.show()
+    f, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True, sharey=True)
+    line.plot(color="#"+line.color.iloc[0], ax=ax)
+    line_stops.plot(color="blue", ax=ax)
+    ax.set_title(line.name.iloc[0])
+    nx.draw(G, {n: [n[0], n[1]] for n in nodes}, ax=ax, node_size=3)
+    plt.show()
+
+    # Compute shortest paths on line graph
+    print("Computing shortest paths for each pairs of stops...")
+    shortest_paths = nx.shortest_path(G)
 
     # Compute pairs of stops by using the cartesian product of the dataframe with itself
     line_stops_pairs = line_stops.assign(dummy=1).merge(line_stops.assign(dummy=1), on='dummy', how='outer', suffixes=('_start', '_end'))
     line_stops_pairs = line_stops_pairs.drop('dummy', axis=1)
     line_stops_pairs = line_stops_pairs[line_stops_pairs.nearest_node_on_graph_start != line_stops_pairs.nearest_node_on_graph_end]
+    print(f"{len(line_stops_pairs)} pairs to process.")
 
     # Compute shortest path for each pair
     line_stops_pairs['shortest_path'] = line_stops_pairs.apply(lambda row: shortest_paths[nodes[row.nearest_node_on_graph_start]][nodes[row.nearest_node_on_graph_end]], axis=1)
@@ -129,23 +168,26 @@ for name in ['RER D']:
 
     line_stops_pairs['shortest_path'] = line_stops_pairs.shortest_path_segments.apply(lambda row: get_shortest_path_from_segments(row, line))
 
+    print("Shortest paths computed.")
+    print("-------")
+
 # Plot a few shortest path
-for i in range(6):
-    f, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True, sharey=True)
-    example = line_stops_pairs.iloc[i]
-    print(example.name_start, example.name_end)
-    sp = gpd.GeoSeries(example.shortest_path)
-    sp.plot(color="red", ax=ax)
-    sp_segments = gpd.GeoSeries(linemerge(example.shortest_path_segments))
-    sp_segments.plot(color="blue", ax=ax)
-    plt.show()
+# for i in random.sample(range(len(line_stops_pairs)), 6):
+#     f, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True, sharey=True)
+#     example = line_stops_pairs.iloc[i]
+#     print(example.name_start, example.name_end)
+#     sp = gpd.GeoSeries(example.shortest_path)
+#     sp.plot(color="red", ax=ax)
+#     sp_segments = gpd.GeoSeries(linemerge(example.shortest_path_segments))
+#     sp_segments.plot(color="blue", ax=ax)
+#     plt.show()
 
 # Build a route between two stops
-print(line_stops.name.iloc[-1])
-start_idx = line_stops.nearest_node_on_graph.iloc[-1]
-print(line_stops.name.iloc[-2])
-end_idx = line_stops.nearest_node_on_graph.iloc[-2]
-sp = shortest_paths[nodes[start_idx]][nodes[end_idx]]
+# print(line_stops.name.iloc[-1])
+# start_idx = line_stops.nearest_node_on_graph.iloc[-1]
+# print(line_stops.name.iloc[-2])
+# end_idx = line_stops.nearest_node_on_graph.iloc[-2]
+# sp = shortest_paths[nodes[start_idx]][nodes[end_idx]]
 
 
 # if __name__ == '__main__':
