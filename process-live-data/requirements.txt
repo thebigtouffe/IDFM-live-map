@@ -2,3 +2,6 @@ requests
 shapely
 networkx
 numpy
+momepy
+pandas
+geopandas
