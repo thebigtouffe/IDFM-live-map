@@ -1,3 +1,4 @@
 {
-    "prim_api_key": ""
+    "prim_api_key": "",
+    "max_distance_between_two_subgraphes": 0.001
 }
