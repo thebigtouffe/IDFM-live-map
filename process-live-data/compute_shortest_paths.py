@@ -22,13 +22,16 @@ with open('settings.json', 'r') as json_file:
 
 prim = PRIM_API(api_key=settings_data["prim_api_key"])
 
-# Download railroad network and stop database
+# Download railroad network and stops database
 if not os.path.exists(prim.NETWORK_DATA_FILE_PATH):
+    print("Download network data.")
     prim.download_network()
 if not os.path.exists(prim.STOPS_DATA_FILE_PATH):
+    print("Download stops data.")
     prim.download_stops()
 
 # Load railroad network and get relevant fields
+print("Loading networks...")
 with open('data/network.json', 'r') as data:
     network_df = pd.json_normalize(json.load(data))
 
@@ -48,7 +51,10 @@ network_df = network_df[network_df.transportation_type.isin(['TRAMWAY', 'RER', '
 network_df.geometry = network_df.geometry.apply(lambda x: LineString(x))
 network_df = gpd.GeoDataFrame(network_df, geometry='geometry')
 
+print("Network loaded as a GeoDataFrame.")
+
 # Load stop database and get relevant fields
+print("Loading stops...")
 with open('data/stops.json', 'r') as data:
     stops_df = pd.json_normalize(json.load(data))
 
@@ -70,22 +76,24 @@ stops_df.line_id = stops_df.line_id.apply(lambda x: x.split(":")[-1])
 stops_df = stops_df[stops_df.line_id.isin(network_df.id)]
 stops_df = gpd.GeoDataFrame(stops_df, geometry=gpd.points_from_xy(stops_df.longitude, stops_df.latitude))
 
+print("Stops loaded as a GeoDataFrame.")
+
 # Iterate over each line
 line_names = list(set(network_df.name.values))
+# line_names = ['METRO 13']
 for name in line_names:
-# for name in ['METRO 13']:
-    print(f"Computing data for {name}.")
+    print(f"\n-------\nComputing data for {name}.")
     line = network_df[network_df.name == name].copy()
     line_stops=stops_df[stops_df.line_id == line.id.iloc[0]].copy()
 
     # Compute network graph from geospatial data
-    print("Computing graph...")
     G = momepy.gdf_to_nx(line, approach="primal")
     nodes = list(G.nodes)
+    print("Graph computed.")
 
     # Network graph is sometimes not connected due to data error
     if not nx.is_connected(G):
-        print("Graph not connected!")
+        print("--- Graph not connected!")
         graph_components = list(nx.connected_components(G))
 
         # Get pairs of disconnected subgraphes
@@ -96,7 +104,7 @@ for name in line_names:
             distance = x.distance(y)
 
             # Create the shortest segment linking subgraphes nodes
-            if distance > 0.0 and distance < 1e-3:
+            if distance > 0.0 and distance < settings_data["max_distance_between_two_subgraphes"]:
                 node1, node2 = nearest_points(x, y)
                 segment = LineString([node1, node2])
                 segments.append(segment)
@@ -109,8 +117,8 @@ for name in line_names:
         G = momepy.gdf_to_nx(line, approach="primal")
         nodes = list(G.nodes)
         if nx.is_connected(G):
-            print("Network graph artificially connected.")
-            print(f"Added segments: {segments}")
+            print("--- Network graph artificially connected.")
+            print(f"--- Added segments: {segments}")
 
     # Get nodes as geodataframe
     nodes_gdf = momepy.nx_to_gdf(G, points=True, lines=False, spatial_weights=True)[0]
@@ -134,7 +142,7 @@ for name in line_names:
     plt.show()
 
     # Compute shortest paths on line graph
-    print("Computing shortest paths for each pairs of stops...")
+    print("Computing shortest paths on network graph for each pairs of stops...")
     shortest_paths = nx.shortest_path(G)
 
     # Compute pairs of stops by using the cartesian product of the dataframe with itself
@@ -149,9 +157,12 @@ for name in line_names:
     line_stops_pairs['shortest_path_segments'] = line_stops_pairs.apply(lambda row: [LineString(x) for x in list(zip(row.shortest_path[0:-1], row.shortest_path[1:]))], axis=1)
 
     # Compute line network with reverse segment
+    print("Extending network data with flipped segments.")
     reverse_line = line.copy()
     reverse_line.geometry = reverse_line.reverse()
     line = pd.concat([line, reverse_line])
+
+    print("Building actual paths for each pairs...")
     
     # Compute (start, end) of each line segment
     line['start_node'] = line.geometry.apply(lambda r: r.coords[0])
@@ -181,150 +192,3 @@ for name in line_names:
 #     sp_segments = gpd.GeoSeries(linemerge(example.shortest_path_segments))
 #     sp_segments.plot(color="blue", ax=ax)
 #     plt.show()
-
-# Build a route between two stops
-# print(line_stops.name.iloc[-1])
-# start_idx = line_stops.nearest_node_on_graph.iloc[-1]
-# print(line_stops.name.iloc[-2])
-# end_idx = line_stops.nearest_node_on_graph.iloc[-2]
-# sp = shortest_paths[nodes[start_idx]][nodes[end_idx]]
-
-
-# if __name__ == '__main__':
-#     prim = PRIM_API(api_key=settings_data["prim_api_key"])
-
-#     if not os.path.exists(prim.NETWORK_DATA_FILE_PATH):
-#         prim.download_network()
-#     if not os.path.exists(prim.STOPS_DATA_FILE_PATH):
-#         prim.download_stops()
-
-#     prim.load_network()
-#     prim.load_stops()
-
-#     # # Test SNCF
-#     # stop=prim.stops['IDFM:monomodalStopPlace:46725']
-#     # d1 = prim.get_arrival_times_by_stop(stop)
-
-#     # # Test metro
-#     # prim.get_arrival_times_by_stop(prim.stops['IDFM:22227'])
-#     # prim.get_arrival_times_by_stop(prim.stops['IDFM:462975'])
-#     # prim.get_arrival_times_by_stop(prim.stops['IDFM:478395'])
-
-#     # Metro 3
-
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463071'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22031'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463090'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463297'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22037'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463068'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22036'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463119'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463258'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:462971'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22020'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:21950'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463174'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:462991'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:462946'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463122'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22029'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463246'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463189'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:21963'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463070'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463228'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:21946'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:21947'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463262'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22021'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22027'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:21906'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22030'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463276'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22019'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22018'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463210'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22028'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463069'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463316'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:21902'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463250'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22022'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463286'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22033'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22032'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:462987'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22034'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:21945'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:21948'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:462990'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:462997'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22035'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22024'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:462986'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463091'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:21994'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22025'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22026'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:462989'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22023'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:462985'])
-
-#     # Metro 1 (multiline)
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22100'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463019'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22083'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22076'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22080'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463012'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463307'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463227'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463170'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463044'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463257'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22082'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22090'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22087'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22103'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22105'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:462943'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463181'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463013'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22078'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463193'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22101'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463121'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22084'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22079'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22074'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463130'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463040'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463294'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463197'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22075'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463150'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463185'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463217'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22099'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22102'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22085'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22081'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463080'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22089'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22091'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463218'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463010'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22086'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463041'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22077'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22104'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463149'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:463160'])
-#     prim.get_arrival_times_by_stop(prim.stops['IDFM:22088'])
-
-#     for k, v in prim.trips.items():
-#         print(v.id, v.stops)
-
-
-#     # prim.get_arrival_times()
