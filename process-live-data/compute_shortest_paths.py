@@ -79,7 +79,7 @@ stops_df = gpd.GeoDataFrame(stops_df, geometry=gpd.points_from_xy(stops_df.longi
 print("Stops loaded as a GeoDataFrame.")
 
 # Iterate over each line
-line_names = list(set(network_df.name.values))
+line_names = list(set(network_df.name.values)).sort()
 # line_names = ['METRO 13']
 all_line_stops_pairs = []
 for name in line_names:
@@ -201,7 +201,16 @@ line_stops_pairs_labels_to_export = [
 all_line_stops_pairs = all_line_stops_pairs[line_stops_pairs_labels_to_export]
 all_line_stops_pairs = gpd.GeoDataFrame(all_line_stops_pairs)
 all_line_stops_pairs = all_line_stops_pairs.set_geometry("shortest_path")
-all_line_stops_pairs.to_file("data/shortest_paths.json", driver="GeoJSON")
+
+# Export shortest paths from each stops as individual GeoPackage files
+for start in set(all_line_stops_pairs['id_start'].values):
+    start_id_md5 = hashlib.start_id_md5(start.encode()).hexdigest()
+    shortest_paths_from_start = all_line_stops_pairs[all_line_stops_pairs['id_start']==start]
+    shortest_paths_from_start.to_file(f"data/shortest_paths/{start_id_md5}.gpkg")
+
+# df = all_line_stops_pairs.set_index(['id_start', 'id_end'])
+# shortest_paths_dict = df.groupby(level=0).apply(lambda df: df.xs(df.name).to_dict()['shortest_path']).to_dict()
+# shortest_paths_dict.to_file("data/shortest_paths.gpkg", driver='GPKG')
 
 # Plot a few shortest path
 # for i in random.sample(range(len(line_stops_pairs)), 6):
