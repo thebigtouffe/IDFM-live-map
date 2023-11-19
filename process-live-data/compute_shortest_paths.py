@@ -9,10 +9,9 @@ import momepy
 from shapely import LineString, Point, MultiPoint
 from shapely.ops import nearest_points, linemerge
 
-import matplotlib.pyplot as plt
-
 from itertools import combinations
 import random
+from hashlib import md5
 
 from src.PRIM_API import PRIM_API
 
@@ -79,8 +78,8 @@ stops_df = gpd.GeoDataFrame(stops_df, geometry=gpd.points_from_xy(stops_df.longi
 print("Stops loaded as a GeoDataFrame.")
 
 # Iterate over each line
-line_names = list(set(network_df.name.values)).sort()
-# line_names = ['METRO 13']
+line_names = sorted(list(set(network_df.name.values)))
+# line_names = ['METRO 13', 'METRO 1']
 all_line_stops_pairs = []
 for name in line_names:
     print(f"\n-------\nComputing data for {name}.")
@@ -135,6 +134,7 @@ for name in line_names:
     line_stops['nearest_node_on_graph'] = line_stops.apply(lambda row: nearest_node(row.geometry), axis=1)
 
     # Plot
+    # import matplotlib.pyplot as plt
     # f, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True, sharey=True)
     # line.plot(color="#"+line.color.iloc[0], ax=ax)
     # line_stops.plot(color="blue", ax=ax)
@@ -193,26 +193,25 @@ stops_df.to_file("data/stops.json", driver="GeoJSON")
 
 print("Exporting shortest paths.")
 all_line_stops_pairs = pd.concat(all_line_stops_pairs)
-line_stops_pairs_labels_to_export = [
-    'id_start',
-    'id_end',
-    'shortest_path',
-]
-all_line_stops_pairs = all_line_stops_pairs[line_stops_pairs_labels_to_export]
+line_stops_pairs_labels_to_export = {
+    'line_id_start': 'line_id',
+    'id_start': 'start_id',
+    'id_end': 'end_id',
+    'shortest_path': 'shortest_path',
+}
+all_line_stops_pairs = all_line_stops_pairs[list(line_stops_pairs_labels_to_export.keys())]
+all_line_stops_pairs = all_line_stops_pairs.rename(columns=line_stops_pairs_labels_to_export)
 all_line_stops_pairs = gpd.GeoDataFrame(all_line_stops_pairs)
 all_line_stops_pairs = all_line_stops_pairs.set_geometry("shortest_path")
 
-# Export shortest paths from each stops as individual GeoPackage files
-for start in set(all_line_stops_pairs['id_start'].values):
-    start_id_md5 = hashlib.start_id_md5(start.encode()).hexdigest()
-    shortest_paths_from_start = all_line_stops_pairs[all_line_stops_pairs['id_start']==start]
-    shortest_paths_from_start.to_file(f"data/shortest_paths/{start_id_md5}.gpkg")
-
-# df = all_line_stops_pairs.set_index(['id_start', 'id_end'])
-# shortest_paths_dict = df.groupby(level=0).apply(lambda df: df.xs(df.name).to_dict()['shortest_path']).to_dict()
-# shortest_paths_dict.to_file("data/shortest_paths.gpkg", driver='GPKG')
+# Export shortest paths from each line as individual GeoPackage files
+for line in set(all_line_stops_pairs['line_id'].values):
+    file_name = line
+    line_shortest_paths = all_line_stops_pairs[all_line_stops_pairs['line_id']==line]
+    line_shortest_paths.to_file(f"data/shortest_paths/{file_name}.gpkg")
 
 # Plot a few shortest path
+# import matplotlib.pyplot as plt
 # for i in random.sample(range(len(line_stops_pairs)), 6):
 #     f, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True, sharey=True)
 #     example = line_stops_pairs.iloc[i]
