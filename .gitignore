@@ -1,7 +1,7 @@
 settings.json
 .DS_Store
 process-live-data/data/*
-process-live-data/raw-data/*
+process-live-data/raw_data/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
