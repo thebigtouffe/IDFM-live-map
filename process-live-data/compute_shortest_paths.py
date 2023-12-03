@@ -5,6 +5,7 @@ import geopandas as gpd
 import pandas as pd
 import networkx as nx
 import momepy
+import numpy as np
 
 from shapely import LineString, Point, MultiPoint
 from shapely.ops import nearest_points, linemerge
@@ -14,6 +15,7 @@ import random
 from hashlib import md5
 
 from src.PRIM_API import PRIM_API
+from src.Utils import Utils
 
 # Load settings from settings.json
 with open('settings.json', 'r') as json_file:
@@ -69,7 +71,10 @@ stops_df = stops_df[list(stops_relevant_fields.keys())]
 stops_df = stops_df.rename(columns=stops_relevant_fields)
 
 # Match line ID format with network dataframe
-stops_df.line_id = stops_df.line_id.apply(lambda x: x.split(":")[-1])
+stops_df['line_id'] = stops_df['line_id'].apply(lambda x: x.split(":")[-1])
+
+# Remove prefix from stop ID
+stops_df['short_id'] = stops_df['id'].apply(lambda x: x.split(":")[-1])
 
 # Only use stops of railroad network (metro, train, tramway)
 stops_df = stops_df[stops_df.line_id.isin(network_df.id)]
@@ -79,12 +84,15 @@ print("Stops loaded as a GeoDataFrame.")
 
 # Iterate over each line
 line_names = sorted(list(set(network_df.name.values)))
-# line_names = ['METRO 13', 'METRO 1']
-all_line_stops_pairs = []
+line_names = ['METRO 1', 'RER C']
+# line_names = ['METRO 3bis']
+
 for name in line_names:
     print(f"\n-------\nComputing data for {name}.")
     line = network_df[network_df.name == name].copy()
-    line_stops=stops_df[stops_df.line_id == line.id.iloc[0]].copy()
+    line_id = line.id.iloc[0]
+    transportation_type = line.transportation_type.iloc[0]
+    line_stops=stops_df[stops_df.line_id == line_id].copy()
 
     # Compute network graph from geospatial data
     G = momepy.gdf_to_nx(line, approach="primal")
@@ -179,9 +187,42 @@ for name in line_names:
         return linemerge(path)
 
     line_stops_pairs['shortest_path'] = line_stops_pairs.shortest_path_segments.apply(lambda row: get_shortest_path_from_segments(row, line))
-    all_line_stops_pairs.append(line_stops_pairs)
 
     print("Shortest paths computed.")
+
+    print("Interpolate paths...")
+    """
+    Optimisation: remove unnecessary shortest paths.
+    -> Remove shortest paths which are too long.
+    -> LineString length must not exceed 50 % of maximum length.
+    """
+    line_stops_pairs['length_in_meter'] = line_stops_pairs.shortest_path.apply(lambda x: Utils.get_linestring_length_in_meters(x))
+    max_length = max(line_stops_pairs['length_in_meter']) / 2
+    optimised_line_stops_pairs = line_stops_pairs[line_stops_pairs['length_in_meter'] < max_length]
+    optimisation_ratio = 1 - (len(optimised_line_stops_pairs) / len(line_stops_pairs))
+    print(f"Removed {100*optimisation_ratio : .2f} % of unnecessary data")
+    line_stops_pairs = optimised_line_stops_pairs
+
+    if transportation_type in ("TRAIN", "RER"):
+        distance_between_points = 150
+    else:
+        distance_between_points = 40
+    line_stops_pairs['shortest_path_interpolated'] = line_stops_pairs.shortest_path.apply(lambda x: Utils.interpolate_linestring(x, distance_between_points=distance_between_points))
+
+
+    print("Exporting shortest paths.")
+    line_stops_pairs_labels_to_export = {
+        'line_id_start': 'line_id',
+        'id_start': 'start_id',
+        'id_end': 'end_id',
+        'shortest_path_interpolated': 'shortest_path',
+    }
+    line_stops_pairs = line_stops_pairs[list(line_stops_pairs_labels_to_export.keys())]
+    line_stops_pairs = line_stops_pairs.rename(columns=line_stops_pairs_labels_to_export)
+    line_stops_pairs = line_stops_pairs.set_geometry("shortest_path")
+
+    line_stops_pairs.to_file(f"data/shortest_paths/{line_id}.gpkg")
+
     print("-------")
 
 # Export data
@@ -190,25 +231,6 @@ network_df.to_file("data/network.json", driver="GeoJSON")
 
 print("Exporting stop database.")
 stops_df.to_file("data/stops.json", driver="GeoJSON")
-
-print("Exporting shortest paths.")
-all_line_stops_pairs = pd.concat(all_line_stops_pairs)
-line_stops_pairs_labels_to_export = {
-    'line_id_start': 'line_id',
-    'id_start': 'start_id',
-    'id_end': 'end_id',
-    'shortest_path': 'shortest_path',
-}
-all_line_stops_pairs = all_line_stops_pairs[list(line_stops_pairs_labels_to_export.keys())]
-all_line_stops_pairs = all_line_stops_pairs.rename(columns=line_stops_pairs_labels_to_export)
-all_line_stops_pairs = gpd.GeoDataFrame(all_line_stops_pairs)
-all_line_stops_pairs = all_line_stops_pairs.set_geometry("shortest_path")
-
-# Export shortest paths from each line as individual GeoPackage files
-for line in set(all_line_stops_pairs['line_id'].values):
-    file_name = line
-    line_shortest_paths = all_line_stops_pairs[all_line_stops_pairs['line_id']==line]
-    line_shortest_paths.to_file(f"data/shortest_paths/{file_name}.gpkg")
 
 # Plot a few shortest path
 # import matplotlib.pyplot as plt
