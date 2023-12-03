@@ -5,3 +5,5 @@ numpy
 momepy
 pandas
 geopandas
+aiohttp
+aiolimiter
