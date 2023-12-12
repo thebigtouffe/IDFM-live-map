@@ -1,6 +1,7 @@
 import requests
 import json
 import urllib.parse
+import shutil
 
 from src.Line import Line
 from src.Stop import Stop
@@ -20,13 +21,18 @@ class PRIM_API:
     # Next trip data
     NEXT_TRIPS_BASE_URL = "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring?MonitoringRef="
 
+    # GTFS data (used for timetable)
+    STATIC_GTFS_URL = "https://eu.ftp.opendatasoft.com/stif/GTFS/IDFM-gtfs.zip"
+    STATIC_GTFS_FILE_PATH = "raw_data/gtfs.zip"
+    STATIC_GTFS_PATH = "raw_data/gtfs"
+
     def __init__(self, api_key="dummy_api_key"):
         self.api_key = api_key
         self.lines = {}
         self.stops = {}
         self.trips = {}
 
-    def __download_data(self, url, file_path):
+    def __download_json_data(self, url, file_path):
         try:
             # Sending a GET request to the API endpoint
             response = requests.get(url)
@@ -40,7 +46,7 @@ class PRIM_API:
                 with open(file_path, "w") as file:
                     json.dump(json_data, file, indent=4)
                 
-                print("JSON data has been downloaded and saved to 'data.json' file.")
+                print(f"JSON data has been downloaded and saved to {file_path}.")
             else:
                 # If the request was not successful, print the error code
                 print("Error: Unable to fetch data from API - Status Code:", response.status_code)
@@ -48,16 +54,25 @@ class PRIM_API:
         except requests.exceptions.RequestException as e:
             # Handle exceptions like network errors, timeout, etc.
             print("Error: ", e)
-    
+
     def download_stops(self):
         url = self.STOPS_DATA_URL
         print("Downloading stops...")
-        self.__download_data(url, self.STOPS_DATA_FILE_PATH)
+        self.__download_json_data(url, self.STOPS_DATA_FILE_PATH)
     
     def download_network(self):
         url = self.NETWORK_DATA_URL
         print("Downloading network...")
-        self.__download_data(url, self.NETWORK_DATA_FILE_PATH)
+        self.__download_json_data(url, self.NETWORK_DATA_FILE_PATH)
+    
+    def download_static_gtfs(self):
+        url = self.STATIC_GTFS_URL
+        print("Downloading static GTFS data...")
+        with requests.get(url, stream=True) as r:
+            with open(self.STATIC_GTFS_FILE_PATH, 'wb') as f:
+                shutil.copyfileobj(r.raw, f)
+        print(f"Unzipping data to {self.STATIC_GTFS_PATH}...")
+        shutil.unpack_archive(self.STATIC_GTFS_FILE_PATH, self.STATIC_GTFS_PATH)
 
     # def __load_line_segment(self, data):
     #     id = data["fields"]["idrefligc"]
