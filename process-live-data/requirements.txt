@@ -8,3 +8,4 @@ geopandas
 aiohttp
 aiolimiter
 dask
+fastparquet
