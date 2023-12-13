@@ -36,19 +36,20 @@ print("Loading networks...")
 with open(prim.NETWORK_DATA_FILE_PATH, 'r') as data:
     network_df = pd.json_normalize(json.load(data))
 
-network_relevant_fields = {    
-                           "fields.idrefligc": 'id',
-                           "fields.geo_shape.coordinates": 'geometry',
-                           "fields.res_com": 'name',
-                           "fields.exploitant": 'company',
-                           "fields.mode": 'transportation_type',
-                           "fields.colourweb_hexa": 'color',
-                           "fields.idf": 'in_idf',
-                           "fields.picto_final": 'picture_url'
+network_relevant_fields = {
+    "fields.idrefligc": 'id',
+    "fields.geo_shape.coordinates": 'geometry',
+    "fields.res_com": 'name',
+    "fields.exploitant": 'company',
+    "fields.mode": 'transportation_type',
+    "fields.colourweb_hexa": 'color',
+    "fields.idf": 'in_idf',
+    "fields.picto_final": 'picture_url'
 }
 network_df = network_df[list(network_relevant_fields.keys())]
 network_df = network_df.rename(columns=network_relevant_fields)
-network_df = network_df[network_df.transportation_type.isin(['TRAMWAY', 'RER', 'METRO', 'TRAIN'])]
+network_df = network_df[network_df.transportation_type.isin(
+    ['TRAMWAY', 'RER', 'METRO', 'TRAIN'])]
 network_df.geometry = network_df.geometry.apply(lambda x: LineString(x))
 network_df = gpd.GeoDataFrame(network_df, geometry='geometry')
 
@@ -59,13 +60,13 @@ print("Loading stops...")
 with open(prim.STOPS_DATA_FILE_PATH, 'r') as data:
     stops_df = pd.json_normalize(json.load(data))
 
-stops_relevant_fields = {    
-                           "fields.stop_id": 'id',
-                           "fields.stop_lon": 'longitude',
-                           "fields.stop_lat": 'latitude',
-                           "fields.stop_name": 'name',
-                           "fields.id": 'line_id',
-                           "fields.operatorname": 'company',
+stops_relevant_fields = {
+    "fields.stop_id": 'id',
+    "fields.stop_lon": 'longitude',
+    "fields.stop_lat": 'latitude',
+    "fields.stop_name": 'name',
+    "fields.id": 'line_id',
+    "fields.operatorname": 'company',
 }
 stops_df = stops_df[list(stops_relevant_fields.keys())]
 stops_df = stops_df.rename(columns=stops_relevant_fields)
@@ -78,21 +79,22 @@ stops_df['short_id'] = stops_df['id'].apply(lambda x: x.split(":")[-1])
 
 # Only use stops of railroad network (metro, train, tramway)
 stops_df = stops_df[stops_df.line_id.isin(network_df.id)]
-stops_df = gpd.GeoDataFrame(stops_df, geometry=gpd.points_from_xy(stops_df.longitude, stops_df.latitude))
+stops_df = gpd.GeoDataFrame(stops_df, geometry=gpd.points_from_xy(
+    stops_df.longitude, stops_df.latitude))
 
 print("Stops loaded as a GeoDataFrame.")
 
 # Iterate over each line
-line_names = sorted(list(set(network_df.name.values)))
-line_names = ['METRO 1', 'RER C']
-# line_names = ['METRO 3bis']
+# line_names = sorted(list(set(network_df.name.values)))
+# line_names = ['METRO 1', 'RER C']
+line_names = ['METRO 10']
 
 for name in line_names:
     print(f"\n-------\nComputing data for {name}.")
     line = network_df[network_df.name == name].copy()
     line_id = line.id.iloc[0]
     transportation_type = line.transportation_type.iloc[0]
-    line_stops=stops_df[stops_df.line_id == line_id].copy()
+    line_stops = stops_df[stops_df.line_id == line_id].copy()
 
     # Compute network graph from geospatial data
     G = momepy.gdf_to_nx(line, approach="primal")
@@ -116,7 +118,7 @@ for name in line_names:
                 node1, node2 = nearest_points(x, y)
                 segment = LineString([node1, node2])
                 segments.append(segment)
-                
+
         new_rows = line.head(len(segments)).copy()
         new_rows.geometry = segments
         line = pd.concat([line, new_rows])
@@ -129,41 +131,50 @@ for name in line_names:
             print(f"--- Added segments: {segments}")
 
     # Get nodes as geodataframe
-    nodes_gdf = momepy.nx_to_gdf(G, points=True, lines=False, spatial_weights=True)[0]
+    nodes_gdf = momepy.nx_to_gdf(
+        G, points=True, lines=False, spatial_weights=True)[0]
     nodes_position = nodes_gdf.geometry.unary_union
 
     def nearest_node(point, nodes_position=nodes_position, nodes_gdf=nodes_gdf):
         # find the nearest point and return the corresponding Node in graph
-        nearest = nodes_gdf.geometry == nearest_points(point, nodes_position)[1]
+        nearest = nodes_gdf.geometry == nearest_points(
+            point, nodes_position)[1]
         return nodes_gdf[nearest].nodeID.values[0]
 
     # Compute nearest node on graph for each stop
     print("Computing nearest node on graph for each stop.")
-    line_stops['nearest_node_on_graph'] = line_stops.apply(lambda row: nearest_node(row.geometry), axis=1)
+    line_stops['nearest_node_on_graph'] = line_stops.apply(
+        lambda row: nearest_node(row.geometry), axis=1)
+    line_stops['position_on_graph'] = line_stops.set_index("nearest_node_on_graph").join(
+        nodes_gdf.set_index("nodeID"), how="left", lsuffix='_stop', rsuffix='_nodes').geometry_nodes.values
 
     # Plot
-    # import matplotlib.pyplot as plt
-    # f, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True, sharey=True)
-    # line.plot(color="#"+line.color.iloc[0], ax=ax)
-    # line_stops.plot(color="blue", ax=ax)
-    # ax.set_title(line.name.iloc[0])
-    # nx.draw(G, {n: [n[0], n[1]] for n in nodes}, ax=ax, node_size=3)
-    # plt.show()
+    import matplotlib.pyplot as plt
+    f, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True, sharey=True)
+    line.plot(color="#"+line.color.iloc[0], ax=ax)
+    line_stops.plot(color="blue", ax=ax)
+    ax.set_title(line.name.iloc[0])
+    nx.draw(G, {n: [n[0], n[1]] for n in nodes}, ax=ax, node_size=3)
+    plt.show()
 
     # Compute shortest paths on line graph
     print("Computing shortest paths on network graph for each pair of stops...")
     shortest_paths = nx.shortest_path(G)
 
     # Compute pairs of stops by using the cartesian product of the dataframe with itself
-    line_stops_pairs = line_stops.assign(dummy=1).merge(line_stops.assign(dummy=1), on='dummy', how='outer', suffixes=('_start', '_end'))
+    line_stops_pairs = line_stops.assign(dummy=1).merge(line_stops.assign(
+        dummy=1), on='dummy', how='outer', suffixes=('_start', '_end'))
     line_stops_pairs = line_stops_pairs.drop('dummy', axis=1)
-    line_stops_pairs = line_stops_pairs[line_stops_pairs.nearest_node_on_graph_start != line_stops_pairs.nearest_node_on_graph_end]
+    line_stops_pairs = line_stops_pairs[line_stops_pairs.nearest_node_on_graph_start !=
+                                        line_stops_pairs.nearest_node_on_graph_end]
     print(f"{len(line_stops_pairs)} pairs to process.")
 
     # Compute shortest path for each pair
-    line_stops_pairs['shortest_path'] = line_stops_pairs.apply(lambda row: shortest_paths[nodes[row.nearest_node_on_graph_start]][nodes[row.nearest_node_on_graph_end]], axis=1)
+    line_stops_pairs['shortest_path'] = line_stops_pairs.apply(
+        lambda row: shortest_paths[nodes[row.nearest_node_on_graph_start]][nodes[row.nearest_node_on_graph_end]], axis=1)
     # Get the segments of the shortest path for further comparison with network dataframe
-    line_stops_pairs['shortest_path_segments'] = line_stops_pairs.apply(lambda row: [LineString(x) for x in list(zip(row.shortest_path[0:-1], row.shortest_path[1:]))], axis=1)
+    line_stops_pairs['shortest_path_segments'] = line_stops_pairs.apply(lambda row: [LineString(
+        x) for x in list(zip(row.shortest_path[0:-1], row.shortest_path[1:]))], axis=1)
 
     # Compute line network with reverse segment
     print("Extending network data with flipped segments.")
@@ -172,7 +183,7 @@ for name in line_names:
     line = pd.concat([line, reverse_line])
 
     print("Building actual paths for every pair...")
-    
+
     # Compute (start, end) of each line segment
     line['start_node'] = line.geometry.apply(lambda r: r.coords[0])
     line['end_node'] = line.geometry.apply(lambda r: r.coords[-1])
@@ -182,33 +193,38 @@ for name in line_names:
         path = []
         for s in segments:
             s_start_node, s_end_node = s.coords[:]
-            s_path = line[(line.start_node == s_start_node) & (line.end_node == s_end_node)].geometry.iloc[0]
+            s_path = line[(line.start_node == s_start_node) & (
+                line.end_node == s_end_node)].geometry.iloc[0]
             path.append(s_path)
         return linemerge(path)
 
-    line_stops_pairs['shortest_path'] = line_stops_pairs.shortest_path_segments.apply(lambda row: get_shortest_path_from_segments(row, line))
+    line_stops_pairs['shortest_path'] = line_stops_pairs.shortest_path_segments.apply(
+        lambda row: get_shortest_path_from_segments(row, line))
 
     print("Shortest paths computed.")
 
     print("Interpolate paths...")
-    """
-    Optimisation: remove unnecessary shortest paths.
-    -> Remove shortest paths which are too long.
-    -> LineString length must not exceed 50 % of maximum length.
-    """
-    line_stops_pairs['length_in_meter'] = line_stops_pairs.shortest_path.apply(lambda x: Utils.get_linestring_length_in_meters(x))
-    max_length = max(line_stops_pairs['length_in_meter']) / 2
-    optimised_line_stops_pairs = line_stops_pairs[line_stops_pairs['length_in_meter'] < max_length]
-    optimisation_ratio = 1 - (len(optimised_line_stops_pairs) / len(line_stops_pairs))
-    print(f"Removed {100*optimisation_ratio : .2f} % of unnecessary data")
-    line_stops_pairs = optimised_line_stops_pairs
+
+    # """
+    # Optimisation: remove unnecessary shortest paths.
+    # -> Remove shortest paths which are too long.
+    # -> LineString length must not exceed 50 % of maximum length.
+    # """
+    # line_stops_pairs['length_in_meter'] = line_stops_pairs.shortest_path.apply(
+    #     lambda x: Utils.get_linestring_length_in_meters(x))
+    # max_length = max(line_stops_pairs['length_in_meter']) / 2
+    # optimised_line_stops_pairs = line_stops_pairs[line_stops_pairs['length_in_meter'] < max_length]
+    # optimisation_ratio = 1 - \
+    #     (len(optimised_line_stops_pairs) / len(line_stops_pairs))
+    # print(f"Removed {100*optimisation_ratio: .2f} % of unnecessary paths")
+    # line_stops_pairs = optimised_line_stops_pairs
 
     if transportation_type in ("TRAIN", "RER"):
-        distance_between_points = 150
+        DISTANCE_BETWEEN_POINTS = 80
     else:
-        distance_between_points = 40
-    line_stops_pairs['shortest_path_interpolated'] = line_stops_pairs.shortest_path.apply(lambda x: Utils.interpolate_linestring(x, distance_between_points=distance_between_points))
-
+        DISTANCE_BETWEEN_POINTS = 30
+    line_stops_pairs['shortest_path_interpolated'] = line_stops_pairs.shortest_path.apply(
+        lambda x: Utils.interpolate_linestring(x, distance_between_points=DISTANCE_BETWEEN_POINTS))
 
     print("Exporting shortest paths.")
     line_stops_pairs_labels_to_export = {
@@ -217,11 +233,16 @@ for name in line_names:
         'id_end': 'end_id',
         'shortest_path_interpolated': 'shortest_path',
     }
-    line_stops_pairs = line_stops_pairs[list(line_stops_pairs_labels_to_export.keys())]
-    line_stops_pairs = line_stops_pairs.rename(columns=line_stops_pairs_labels_to_export)
+    line_stops_pairs = line_stops_pairs[list(
+        line_stops_pairs_labels_to_export.keys())]
+    line_stops_pairs = line_stops_pairs.rename(
+        columns=line_stops_pairs_labels_to_export)
     line_stops_pairs = line_stops_pairs.set_geometry("shortest_path")
 
-    line_stops_pairs.to_file(f"data/shortest_paths/{line_id}.gpkg")
+    save_directory = os.path.join('data', 'shortest_paths')
+    if not os.path.exists(save_directory):
+        os.mkdir(save_directory)
+    line_stops_pairs.to_file(os.path.join(save_directory, f"{line_id}.gpkg"))
 
     print("-------")
 
