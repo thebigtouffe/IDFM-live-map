@@ -5,7 +5,7 @@ numpy
 momepy
 pandas
 geopandas
-aiohttp
-aiolimiter
 dask
 fastparquet
+aiohttp
+aiolimiter
