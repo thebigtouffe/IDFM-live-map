@@ -6,7 +6,7 @@ import os
 from src.PRIM_API import PRIM_API
 from src.Utils import Utils
 
-DEBUG = True
+# DEBUG = False
 
 # Load settings from settings.json
 with open('settings.json', 'r') as json_file:
@@ -14,9 +14,9 @@ with open('settings.json', 'r') as json_file:
 
 prim = PRIM_API(api_key=settings_data["prim_api_key"])
 
-if not DEBUG:
-    print("Download static GTFS data.")
-    prim.download_static_gtfs()
+# if not DEBUG:
+#     print("Download static GTFS data.")
+#     prim.download_static_gtfs()
 
 calendar_path = os.path.join(prim.STATIC_GTFS_PATH, 'calendar.txt')
 calendar = dd.read_csv(calendar_path, dtype={'service_id': 'str',
@@ -83,16 +83,17 @@ lines = computed_lines.intersection(all_lines)
 for line in lines:
     print(f"Summarize data for line {line}")
 
-    # Join trips with calendar data. Store in memory.
+    print("- Join trips with calendar data. Store in memory.")
     l_trips = trips[trips['route_short_id'] == line]
     l_trips = l_trips.set_index('service_id')
     l_trips = l_trips.join(calendar, how='inner')
     l_trips = l_trips.reset_index().set_index('trip_id').compute()
     l_trips_id = set(l_trips.index.values)
 
-    # Join time table with trips
+    print("- Join time table with trips")
     l_stop_times = stop_times
     l_stop_times = stop_times[stop_times['trip_id'].isin(l_trips_id)]
+    print("- Retrieve filtered time table in memory")
     l_stop_times = l_stop_times.compute()
     l_stop_times = l_stop_times.set_index('trip_id').join(l_trips, how='inner',
                                                           lsuffix='stop_times_',
@@ -100,6 +101,7 @@ for line in lines:
     l_stop_times = l_stop_times.reset_index()
 
     # Export enriched time table as a parquet file (faster than csv/json)
+    print("- Saving data")
     save_directory = os.path.join('data', 'gtfs')
     if not os.path.exists(save_directory):
         os.mkdir(save_directory)
