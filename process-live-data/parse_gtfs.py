@@ -90,7 +90,7 @@ for line in lines:
     l_trips = l_trips.reset_index().set_index('trip_id').compute()
     l_trips_id = set(l_trips.index.values)
 
-    print("- Join time table with trips")
+    print("- Join time table with trips.")
     l_stop_times = stop_times
     l_stop_times = stop_times[stop_times['trip_id'].isin(l_trips_id)]
     print("- Retrieve filtered time table in memory")
@@ -101,7 +101,7 @@ for line in lines:
     l_stop_times = l_stop_times.reset_index()
 
     # Export enriched time table as a parquet file (faster than csv/json)
-    print("- Saving data")
+    print("- Saving data.")
     save_directory = os.path.join('data', 'gtfs')
     if not os.path.exists(save_directory):
         os.mkdir(save_directory)
