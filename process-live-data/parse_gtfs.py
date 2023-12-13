@@ -79,16 +79,18 @@ computed_lines_path = os.path.join('data', 'shortest_paths')
 computed_lines = {x.split('.')[0] for x in os.listdir(computed_lines_path)}
 # Get relevant lines
 lines = computed_lines.intersection(all_lines)
-lines = ['C01729']
 
 for line in lines:
     print(f"Summarize data for line {line}")
+
+    # Join trips with calendar data. Store in memory.
     l_trips = trips[trips['route_short_id'] == line]
     l_trips = l_trips.set_index('service_id')
     l_trips = l_trips.join(calendar, how='inner')
     l_trips = l_trips.reset_index().set_index('trip_id').compute()
     l_trips_id = set(l_trips.index.values)
 
+    # Join time table with trips
     l_stop_times = stop_times
     l_stop_times = stop_times[stop_times['trip_id'].isin(l_trips_id)]
     l_stop_times = l_stop_times.compute()
@@ -97,7 +99,8 @@ for line in lines:
                                                           rsuffix='trips_')
     l_stop_times = l_stop_times.reset_index()
 
+    # Export enriched time table as a parquet file (faster than csv/json)
     save_directory = os.path.join('data', 'gtfs')
     if not os.path.exists(save_directory):
         os.mkdir(save_directory)
-    l_stop_times.to_json(os.path.join(save_directory, line))
+    l_stop_times.to_parquet(os.path.join(save_directory, line))
