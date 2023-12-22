@@ -8,4 +8,5 @@ geopandas
 dask
 fastparquet
 aiohttp
+ipympl
 aiolimiter
