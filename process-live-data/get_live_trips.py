@@ -1,18 +1,8 @@
 import os
 import json
 import urllib
-
 import geopandas as gpd
 import pandas as pd
-import networkx as nx
-import momepy
-
-from shapely import LineString, Point, MultiPoint
-from shapely.ops import nearest_points, linemerge
-
-from itertools import combinations
-import random
-
 import asyncio
 import time
 import datetime
@@ -22,7 +12,9 @@ from aiolimiter import AsyncLimiter
 from src.PRIM_API import PRIM_API
 from src.ArrivalTime import ArrivalTime
 
-start_time = time.time()
+import logging
+logging.basicConfig(format='[%(asctime)s.%(msecs)03d] %(levelname)-8s %(message)s',
+                    level=logging.INFO, datefmt='%S')
 
 # Limit to 50 requests/second
 limiter = AsyncLimiter(50, time_period=1)
@@ -30,24 +22,23 @@ limiter = AsyncLimiter(50, time_period=1)
 # Load settings from settings.json
 with open('settings.json', 'r') as json_file:
     settings_data = json.load(json_file)
-
 prim = PRIM_API(api_key=settings_data["prim_api_key"])
+logging.info("Read settings and instantiate PRIM API.")
 
-print("Get settings: %s seconds" % (time.time() - start_time))
+# Load stops and network
+network = gpd.read_parquet('data/network.parquet')
+logging.info("Loaded network dataframe.")
 
-network = gpd.read_file('data/network.json')
-stops = gpd.read_file('data/stops.json')
-
-print("Load network and stops: %s seconds" % (time.time() - start_time))
-
+stops = gpd.read_parquet('data/stops.parquet')
+logging.info("Loaded stops dataframe.")
 
 def get_remaining_time_until_next_fetch():
     # Get the current time
     now = datetime.datetime.now()
-    print(now)
     h = now.hour
     m = now.minute
 
+    # Define data fetch frequency in minutes
     if h == 5:
         fetch_frequency = 4
     elif h == 6:
@@ -89,7 +80,7 @@ def parse_trip_json(trip, stop_id):
         line_id = line_id.rstrip(":").split(":")[-1]
 
         destination_id = trip['MonitoredVehicleJourney']['DestinationRef']['value']
-        stop_name = stops[stops.short_id==stop_id].iloc[0]['name']
+        stop_name = stops[stops.short_id == stop_id].iloc[0]['name']
 
         trip_dict = {'id': id,
                      'stop_id': stop_id,
@@ -108,16 +99,22 @@ def parse_trip_json(trip, stop_id):
 
 
 async def get_next_trains_from_stop(stop_id, url, session, prim_api):
+    # Fetch data using the AsyncLimiter
     async with limiter:
-        async with session.get(url, headers={"apiKey": prim_api.api_key, "accept": "application/json"}) as resp:
+        headers = {"apiKey": prim_api.api_key,
+                   "accept": "application/json"
+                   }
+
+        # Fetch data using AioHttp
+        async with session.get(url, headers=headers) as resp:
             json_data = await resp.json()
-            print(f"Got data from {url}")
+            logging.info(f"Got data for stop {stop_id} from {url}")
 
             try:
                 trips = json_data['Siri']['ServiceDelivery']['StopMonitoringDelivery'][0]['MonitoredStopVisit']
             except Exception as e:
-                print(e)
-                print(json_data)
+                logging.error(e)
+                logging.error(json_data)
 
             # Only return the next trip
             # return [parse_trip_json(trips[0], stop_id)]
@@ -135,20 +132,23 @@ def rebuild_trips(trips):
 
 async def get_trips(line_id):
     tasks = []
-    short_ids = list(set(stops[stops['line_id'] == line_id].short_id.values))
-    transportation_type = network[network.id==line_id].iloc[0].transportation_type
+
+    stop_short_ids = stops[stops['line_short_id'] == line_id].short_id
+    stop_short_ids = list(set(stop_short_ids.values))
+    transportation_type = network[network['short_id']== line_id].iloc[0].transportation_type
 
     async with aiohttp.ClientSession() as session:
         # Fetch arrival times at each stop
-        for short_id in short_ids:
-            url = prim.NEXT_TRIPS_BASE_URL + \
-                urllib.parse.quote(f"STIF:StopPoint:Q:{short_id}:")
+        for short_id in stop_short_ids:
+            get_arg = urllib.parse.quote(f"STIF:StopPoint:Q:{short_id}:")
+            url = prim.NEXT_TRIPS_BASE_URL + get_arg
+
             tasks.append(asyncio.ensure_future(
                 get_next_trains_from_stop(short_id, url, session, prim)))
-        print("Created async tasks: %s seconds" % (time.time() - start_time))
+        logging.info("Created async tasks.")
 
         responses = await asyncio.gather(*tasks)
-        print("Execute taks: %s seconds" % (time.time() - start_time))
+        logging.info(f"Executed {len(tasks)} tasks.")
 
         # print(responses)
 
@@ -157,18 +157,21 @@ async def get_trips(line_id):
         trips = pd.DataFrame.from_dict(trips)
 
         # Link time and positions for each trip
-        trips['time_position'] = list(zip(trips.stop_id, trips.arrival_time, trips.stop_name))
+        trips['time_position'] = list(
+            zip(trips.stop_id, trips.arrival_time, trips.stop_name))
 
         # RATP data is not complete for metro and tramway
         # Thus we have to manually build trips using the timetable and real-time data for next trains.
         if transportation_type in ("TRAMWAY", "METRO"):
             rebuild_trips(trips)
-        trips_groupby = trips.groupby(['id', 'line_id', 'destination_id'])['time_position'].unique().reset_index()
+        trips_groupby = trips.groupby(['id', 'line_id', 'destination_id'])[
+            'time_position'].unique().reset_index()
 
         # Load shortest paths database
-        shortest_paths = gpd.read_file(f'data/shortest_paths/{line_id}.gpkg')
+        shortest_paths = gpd.read_parquet(
+            f'data/shortest_paths/{line_id}.parquet')
 
-        print(f"Generate dataframe from response: {time.time() - start_time} seconds")
+        logging.info("Generated dataframe from response.")
         return trips, trips_groupby
 
 
@@ -177,19 +180,18 @@ async def main():
         # line_ids = set(stops.line_id)
         line_ids = list(set(stops.line_id))[:5]
 
-        arrival_times = await asyncio.gather(
-            *[get_trips(line_id) for line_id in line_ids]
-        )
+        arrival_times = await asyncio.gather(*[get_trips(x) for x in line_ids])
 
+        # Once data is retrieve, sleep until next scheduled fetch
         time_to_sleep = get_remaining_time_until_next_fetch()
-        print(f"Will sleep {time_to_sleep} seconds until next fetch...")
+        logging.info(f"Will sleep {time_to_sleep} seconds until next fetch...")
         await asyncio.sleep(time_to_sleep)
 
 
 # Run the main coroutine
-#thread = asyncio.run(main())
+# thread = asyncio.run(main())
 
 # Test for one line
 line_id = "C01383"
-shortest_paths = gpd.read_file(f'data/shortest_paths/{line_id}.gpkg')
+shortest_paths = gpd.read_parquet(f'data/shortest_paths/{line_id}.parquet')
 t, t2 = asyncio.run(get_trips(line_id))
