@@ -6,6 +6,10 @@ from pyproj import Geod
 class Utils:
 
     @staticmethod
+    def compute_short_id(x):
+        return x.rstrip(":").split(":")[-1]
+
+    @staticmethod
     def get_linestring_length_in_meters(line):
         # Distance in meter
         geod = Geod(ellps="WGS84")
