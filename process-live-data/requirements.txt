@@ -10,3 +10,4 @@ fastparquet
 aiohttp
 ipympl
 aiolimiter
+pyarrow
