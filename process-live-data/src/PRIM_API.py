@@ -2,11 +2,21 @@ import requests
 import json
 import urllib.parse
 import shutil
+import logging
+import pytz
 
 from src.Line import Line
 from src.Stop import Stop
 from src.Trip import Trip
+from src.Utils import Utils
 from src.ArrivalTime import ArrivalTime
+
+# Limit to 50 requests/second
+from aiolimiter import AsyncLimiter
+limiter = AsyncLimiter(50, time_period=1)
+
+logging.basicConfig(format='[%(asctime)s.%(msecs)03d] %(levelname)-8s %(message)s',
+                    level=logging.INFO, datefmt='%H:%M:%S')
 
 class PRIM_API:
 
@@ -73,6 +83,91 @@ class PRIM_API:
                 shutil.copyfileobj(r.raw, f)
         print(f"Unzipping data to {self.STATIC_GTFS_PATH}...")
         shutil.unpack_archive(self.STATIC_GTFS_FILE_PATH, self.STATIC_GTFS_PATH)
+
+    @staticmethod
+    def get_train_name_from_trip_data(trip):
+        name = ""
+
+        # Get train name (if available)
+        try:
+            name = trip['MonitoredVehicleJourney']['JourneyNote'][0]['value']
+        except:
+            pass
+
+        return name
+
+    @staticmethod
+    def parse_trip_json(trip, stop_short_id):
+        # Get trip attributes
+        try:
+            stop_name = trip['MonitoredVehicleJourney']['MonitoredCall']['StopPointName'][0]['value']
+
+            update_time = ArrivalTime.parse_date_from_string(trip['RecordedAtTime'])
+
+            if 'ExpectedArrivalTime' in trip['MonitoredVehicleJourney']['MonitoredCall'].keys():
+                arrival_time = trip['MonitoredVehicleJourney']['MonitoredCall']['ExpectedArrivalTime']
+                arrival_time = ArrivalTime.parse_date_from_string(arrival_time)
+
+                # Arrival time is in UTC
+                arrival_time = arrival_time.replace(tzinfo=pytz.timezone('UTC'))
+            else:
+                return None
+
+            trip_id = trip['MonitoredVehicleJourney']['FramedVehicleJourneyRef']['DatedVehicleJourneyRef']
+
+            line_id = trip['MonitoredVehicleJourney']['LineRef']['value']
+            line_short_id = Utils.compute_short_id(line_id)
+
+            destination_id = trip['MonitoredVehicleJourney']['DestinationRef']['value']
+            destination_id = Utils.compute_short_id(destination_id)
+
+            destination_name = trip['MonitoredVehicleJourney']['MonitoredCall']['DestinationDisplay'][0]['value']
+
+            trip_dict = {'id': trip_id,
+                        'name': PRIM_API.get_train_name_from_trip_data(trip),
+                        'update_time': update_time,
+
+                        'stop_short_id': stop_short_id,
+                        'stop_name': stop_name,
+
+                        'line_short_id': line_short_id,
+                        'destination_id': destination_id,
+                        'destination_name': destination_name,
+
+                        'arrival_time': arrival_time
+                        }
+            return trip_dict
+
+        except Exception as e:
+            logging.error(e)
+            logging.error(trip)
+            return None
+
+
+    async def get_next_trips_at_stop(self, stop_short_id, session):
+        # Create URL for the next trips of the stop
+        url_arg = urllib.parse.quote(f"STIF:StopPoint:Q:{stop_short_id}:")
+        url = self.NEXT_TRIPS_BASE_URL + url_arg
+
+        # Fetch data using the AsyncLimiter
+        async with limiter:
+            headers = {
+                "apiKey": self.api_key,
+                "accept": "application/json"
+            }
+
+            # Fetch data using AioHttp
+            async with session.get(url, headers=headers) as resp:
+                json_data = await resp.json()
+                logging.info(f"Got data for stop {stop_short_id} from {url}")
+
+                try:
+                    trips = json_data['Siri']['ServiceDelivery']['StopMonitoringDelivery'][0]['MonitoredStopVisit']
+                except Exception as e:
+                    logging.error(e)
+                    logging.error(json_data)
+
+                return [self.parse_trip_json(trip, stop_short_id) for trip in trips]
 
     # def __load_line_segment(self, data):
     #     id = data["fields"]["idrefligc"]
