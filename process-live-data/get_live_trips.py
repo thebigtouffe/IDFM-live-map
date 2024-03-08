@@ -33,6 +33,7 @@ logging.info("Loaded network dataframe.")
 stops = gpd.read_parquet('data/stops.parquet')
 logging.info("Loaded stops dataframe.")
 
+# Dict to store data for trips for each line
 all_trips = {}
 
 def get_remaining_time_until_next_fetch():
@@ -118,8 +119,7 @@ def compute_coords_timestamps(trips, line_name, line_short_id):
 
         if len(coords) > 0 and len(timestamps) > 0:
             # Concatenate timestamps for each segment of the trip
-            if len(timestamps) > 1:
-                timestamps = np.concatenate(timestamps)
+            timestamps = np.concatenate(timestamps)
 
             return pd.Series([coords, timestamps])
         else:
@@ -277,7 +277,7 @@ async def get_line_trips(line_short_id):
                 logging.info(f"[{line_name}] Clean old data out of dataframe.")
             all_trips[line_id] = trips
 
-        return trips
+        # return trips
         return compute_coords_timestamps(trips, line_name, line_short_id)
 
 
