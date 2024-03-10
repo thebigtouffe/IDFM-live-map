@@ -29,7 +29,7 @@ class PRIM_API:
     NETWORK_DATA_FILE_PATH = "raw_data/network.json"
 
     # Next trip data
-    NEXT_TRIPS_BASE_URL = "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring?MonitoringRef="
+    NEXT_TRIPS_BASE_URL = "https://prim.iledefrance-mobilites.fr/marketplace/stop-monitoring?MonitoringRef=%s"
 
     # GTFS data (used for timetable)
     STATIC_GTFS_URL = "https://eu.ftp.opendatasoft.com/stif/GTFS/IDFM-gtfs.zip"
@@ -97,7 +97,7 @@ class PRIM_API:
         return name
 
     @staticmethod
-    def parse_trip_json(trip, stop_short_id):
+    def parse_trip_json(trip, stop_short_id, line_short_id):
         # Get trip attributes
         try:
             stop_name = trip['MonitoredVehicleJourney']['MonitoredCall']['StopPointName'][0]['value']
@@ -116,7 +116,11 @@ class PRIM_API:
             trip_id = trip['MonitoredVehicleJourney']['FramedVehicleJourneyRef']['DatedVehicleJourneyRef']
 
             line_id = trip['MonitoredVehicleJourney']['LineRef']['value']
-            line_short_id = Utils.compute_short_id(line_id)
+
+            # Sometimes data from other lines pollute trips
+            if line_short_id != Utils.compute_short_id(line_id):
+                logging.warning(f'Ignoring trip {trip_id} from line {line_id}')
+                return None
 
             destination_id = trip['MonitoredVehicleJourney']['DestinationRef']['value']
             destination_id = Utils.compute_short_id(destination_id)
@@ -144,10 +148,10 @@ class PRIM_API:
             return None
 
 
-    async def get_next_trips_at_stop(self, stop_short_id, session):
+    async def get_next_trips_at_stop(self, stop_short_id, line_short_id, session):
         # Create URL for the next trips of the stop
-        url_arg = urllib.parse.quote(f"STIF:StopPoint:Q:{stop_short_id}:")
-        url = self.NEXT_TRIPS_BASE_URL + url_arg
+        url_arg_stop = urllib.parse.quote(f"STIF:StopPoint:Q:{stop_short_id}:")
+        url = self.NEXT_TRIPS_BASE_URL % url_arg_stop
 
         # Fetch data using the AsyncLimiter
         async with limiter:
@@ -163,11 +167,13 @@ class PRIM_API:
 
                 try:
                     trips = json_data['Siri']['ServiceDelivery']['StopMonitoringDelivery'][0]['MonitoredStopVisit']
+                    return [self.parse_trip_json(trip, stop_short_id, line_short_id) for trip in trips]
                 except Exception as e:
                     logging.error(e)
                     logging.error(json_data)
 
-                return [self.parse_trip_json(trip, stop_short_id) for trip in trips]
+
+                
 
     # def __load_line_segment(self, data):
     #     id = data["fields"]["idrefligc"]

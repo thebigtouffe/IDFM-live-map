@@ -243,7 +243,7 @@ async def get_line_trips(line_short_id):
         # Fetch arrival times at each stop
         for short_id in stop_short_ids:
             tasks.append(asyncio.ensure_future(
-                prim.get_next_trips_at_stop(short_id, session)))
+                prim.get_next_trips_at_stop(short_id, line_short_id, session)))
         logging.info(f"[{line_name}] Created async tasks.")
 
         responses = await asyncio.gather(*tasks)
@@ -277,7 +277,7 @@ async def get_line_trips(line_short_id):
                 logging.info(f"[{line_name}] Clean old data out of dataframe.")
             all_trips[line_id] = trips
 
-        # return trips
+        return trips
         return compute_coords_timestamps(trips, line_name, line_short_id)
 
 
