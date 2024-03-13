@@ -104,14 +104,16 @@ class PRIM_API:
 
             update_time = ArrivalTime.parse_date_from_string(trip['RecordedAtTime'])
 
-            if 'ExpectedArrivalTime' in trip['MonitoredVehicleJourney']['MonitoredCall'].keys():
+            # Get Arrival Time in UTC
+            monitoredcall_keys = trip['MonitoredVehicleJourney']['MonitoredCall'].keys()
+            if 'ExpectedArrivalTime' in monitoredcall_keys:
                 arrival_time = trip['MonitoredVehicleJourney']['MonitoredCall']['ExpectedArrivalTime']
-                arrival_time = ArrivalTime.parse_date_from_string(arrival_time)
-
-                # Arrival time is in UTC
-                arrival_time = arrival_time.replace(tzinfo=pytz.timezone('UTC'))
+            elif 'ExpectedDepartureTime' in monitoredcall_keys:
+                arrival_time = trip['MonitoredVehicleJourney']['MonitoredCall']['ExpectedDepartureTime']
             else:
                 return None
+            arrival_time = ArrivalTime.parse_date_from_string(arrival_time)
+            arrival_time = arrival_time.replace(tzinfo=pytz.timezone('UTC'))
 
             trip_id = trip['MonitoredVehicleJourney']['FramedVehicleJourneyRef']['DatedVehicleJourneyRef']
 
@@ -140,6 +142,7 @@ class PRIM_API:
 
                         'arrival_time': arrival_time
                         }
+
             return trip_dict
 
         except Exception as e:
