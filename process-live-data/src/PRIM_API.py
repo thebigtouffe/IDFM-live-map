@@ -4,6 +4,7 @@ import urllib.parse
 import shutil
 import logging
 import pytz
+import traceback
 
 from src.Line import Line
 from src.Stop import Stop
@@ -121,13 +122,21 @@ class PRIM_API:
 
             # Sometimes data from other lines pollute trips
             if line_short_id != Utils.compute_short_id(line_id):
-                logging.warning(f'Ignoring trip {trip_id} from line {line_id}')
+                logging.debug(f'Ignoring trip {trip_id} from line {line_id}')
                 return None
 
             destination_id = trip['MonitoredVehicleJourney']['DestinationRef']['value']
             destination_id = Utils.compute_short_id(destination_id)
+            
 
-            destination_name = trip['MonitoredVehicleJourney']['MonitoredCall']['DestinationDisplay'][0]['value']
+            def coalesce(*arg):
+                return next((a for a in arg if a is not None), None)
+
+            destination_name = coalesce(
+                trip['MonitoredVehicleJourney']['MonitoredCall']['DestinationDisplay'][0]['value'] if len(trip['MonitoredVehicleJourney']['MonitoredCall']['DestinationDisplay']) > 0 else None,
+                trip['MonitoredVehicleJourney']['DestinationName'][0]['value'] if len(trip['MonitoredVehicleJourney']['DestinationName']) > 0 else None,
+                trip['MonitoredVehicleJourney']['DirectionName'][0]['value'] if len(trip['MonitoredVehicleJourney']['DirectionName']) > 0 else None
+            )
 
             trip_dict = {'id': trip_id,
                         'name': PRIM_API.get_train_name_from_trip_data(trip),
@@ -146,8 +155,8 @@ class PRIM_API:
             return trip_dict
 
         except Exception as e:
-            logging.error(e)
-            logging.error(trip)
+            logging.error(traceback.format_exc())
+            print(trip)
             return None
 
 
@@ -166,7 +175,7 @@ class PRIM_API:
             # Fetch data using AioHttp
             async with session.get(url, headers=headers) as resp:
                 json_data = await resp.json()
-                logging.info(f"Got data for stop {stop_short_id} from {url}")
+                logging.debug(f"Got data for stop {stop_short_id} from {url}")
 
                 try:
                     trips = json_data['Siri']['ServiceDelivery']['StopMonitoringDelivery'][0]['MonitoredStopVisit']
