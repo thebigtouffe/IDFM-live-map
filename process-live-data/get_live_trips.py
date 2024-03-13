@@ -1,6 +1,5 @@
 import os
 import json
-import urllib
 import geopandas as gpd
 import pandas as pd
 import numpy as np
@@ -8,6 +7,7 @@ import asyncio
 import time
 import datetime
 import pytz
+import traceback
 import aiohttp
 from aiolimiter import AsyncLimiter
 
@@ -35,6 +35,7 @@ logging.info("Loaded stops dataframe.")
 
 # Dict to store data for trips for each line
 all_trips = {}
+
 
 def get_remaining_time_until_next_fetch():
     # Get the current time
@@ -135,8 +136,16 @@ def compute_coords_timestamps(trips, line_name, line_short_id):
 
 
 def rebuild_trip_ids_from_timetable(trips, timetable):
-    trips['processed'] = False
-    trips['row_id'] = trips.index
+    output_keys = [
+        'id',
+        'name',
+        'stop_short_id',
+        'stop_name',
+        'line_short_id',
+        'destination_id',
+        'destination_name',
+        'arrival_time',
+    ]
 
     # Get the current date in Paris time zone
     day_of_week = datetime.datetime.now().strftime("%A")
@@ -147,7 +156,6 @@ def rebuild_trip_ids_from_timetable(trips, timetable):
     # Filter timetable for current day of week
     timetable = timetable[timetable[day_of_week.lower()] == True]
     tt = timetable.copy()
-    print(tt)
 
     # Parse data
     tt['stop_short_id'] = tt['stop_id'].apply(lambda x: Utils.compute_short_id(x))
@@ -157,13 +165,17 @@ def rebuild_trip_ids_from_timetable(trips, timetable):
     tt['destination_name'] = tt['trip_headsign']
     tt['id'] = tt['trip_id']
     tt['line_short_id'] = tt['route_short_id']
+    tt['name'] = ''
 
     # Filter on trains of the day
     tt = tt[today >= tt['start_date']]
     tt = tt[today - datetime.timedelta(days=1) <= tt['end_date']]
 
-    # Filter on trains less than 60 min late
-    tt = tt[tt['arrival_time'] > now - datetime.timedelta(minutes=60)]
+    # Assuming trains can be up to 2 minutes early
+    tt = tt[tt['arrival_time'] > now - datetime.timedelta(minutes=2)]
+
+    # Filter on trains expected within the next 60 minutes
+    tt = tt[tt['arrival_time'] < now + datetime.timedelta(minutes=60)]
 
     # Parse trip destination
     def append_destination(group):
@@ -171,77 +183,22 @@ def rebuild_trip_ids_from_timetable(trips, timetable):
         return group
     tt = tt.sort_values(by=['stop_sequence']).groupby('trip_id').apply(append_destination, include_groups=False)
     tt = tt.reset_index()
-    print(tt)
 
-    # Get stop name
+    # Get stop name from real-time data
     stops_data = trips[['stop_short_id', 'stop_name']].drop_duplicates().set_index('stop_short_id')
     tt = tt.set_index('stop_short_id').join(stops_data,
                                             how='left',
                                             lsuffix='tt_',
                                             rsuffix='trips_')
     tt = tt.reset_index()
-    print(tt)
 
-    # Filter on trains expected within the next 60 minutes
-    tt = tt[tt['arrival_time'] < now + datetime.timedelta(minutes=60)]
-    print(tt.iloc[0])
+    # TODO: Use real-time data when trains are delayed
 
-    keys_to_keep = [
-        'id',
-        'stop_short_id',
-        'stop_name',
-        'line_short_id',
-        'destination_id',
-        'destination_name',
-        'arrival_time',
-    ]
-
-    return tt[keys_to_keep]
-
-    # Iterate over stops from real-time data
-    # for stop in set(trips.stop_short_id):
-    #     print("-------------------")
-    #     print(f"Processing stop {stop}")
-
-    #     # Get next scheduled trains for the stop and sort by their arrival time
-    #     stop_tt_key = ['trip_id', 'destination_id', 'arrival_time', 'search_earliest']
-    #     stop_tt = tt[tt['stop_short_id'] == stop][stop_tt_key]
-    #     stop_tt = stop_tt.sort_values(by=['arrival_time'])
-    #     stop_tt = stop_tt.head(5)
-
-    #     print("\nScheduled trips:")
-    #     print(stop_tt)
-
-    #     # Bind scheduled trains with the closest real-time arrivals
-    #     stop_trips = trips[trips['stop_short_id'] == stop]
-    #     stop_trips = stop_trips.sort_values(by=['arrival_time'])
-
-    #     print("\nStop trips:")
-    #     print(stop_trips)
-
-    #     print("\nIterating over timetable at stop...\n")
-    #     for i, x in stop_tt.iterrows():
-    #         # Get the first unprocessed real-time data trip 
-    #         filter = stop_trips['processed'] == False
-    #         # that is expected after scheduled arrival time
-    #         filter &= stop_trips['arrival_time'] >= x.search_earliest
-    #         # for the correct destination
-    #         filter &= stop_trips['destination_id'] == x.destination_id
-
-    #         if not stop_trips[filter].empty:
-    #             rt_row_id = stop_trips[filter].iloc[0].row_id
-    #             print(f"\tFound scheduled trip to {x.destination_id} at index {rt_row_id}")
-
-    #             # Replace trip id of real-time data with trip_id from schedule
-    #             stop_trips.at[rt_row_id, 'processed'] = True
-    #             trips.at[rt_row_id, 'id'] = x.trip_id
-    #             trips.at[rt_row_id, 'processed'] = True
-
-    #             # print(stop_trips)
-
-    #     print("-------------------\n")
-
-    # return trips
+    try:
+        return tt[output_keys]
+    except Exception as e:
+        logging.error(traceback.format_exc())
+        print(trips.iloc[0])
 
 
 async def get_line_trips(line_short_id):
@@ -267,7 +224,10 @@ async def get_line_trips(line_short_id):
         # Generate trips dataframe for the line
         trips = [t for r in responses for t in r if t is not None]
         trips = pd.DataFrame.from_dict(trips)
-        logging.info(f"[{line_name}] Generated dataframe from response.")
+        logging.info(f"[{line_name}] Generated dataframe with {len(trips)} rows from response.")
+
+        if len(trips) == 0:
+            return None
 
         # RATP data is not complete for metro and tramway
         # Thus we have to manually build trips using the timetable and real-time data for next trains.
@@ -276,23 +236,24 @@ async def get_line_trips(line_short_id):
             timetable_path = os.path.join(timetable_dir, line_short_id)
             timetable = pd.read_parquet(timetable_path)
 
-            return rebuild_trip_ids_from_timetable(trips, timetable)
-            # trips = trips[trips.processed == True]
+            logging.info(f"[{line_name}] Rebuilding trips using train schedule.")
+            trips = rebuild_trip_ids_from_timetable(trips, timetable)
         
         # Add previous data for lines with trip id. Keep latest data.
         else:
-            if line_id in all_trips.keys():
-                previous_trips = all_trips[line_id]
+            if line_short_id in all_trips.keys():
+                previous_trips = all_trips[line_short_id]
                 trips = pd.concat([trips, previous_trips])
-                trips = trips.sort_values('update_time').drop_duplicates(subset=['id', 'stop_short_id'], keep='last')
+                trips = trips.sort_values('update_time').drop_duplicates(subset=['id', 'stop_short_id'],
+                                                                         keep='last')
                 logging.info(f"[{line_name}] Enrich dataframe with previous data.")
 
                 # Clean data older than 2 hours
                 trips = trips[trips['update_time'] >= np.datetime64('now') - np.timedelta64(2, 'h')]
                 logging.info(f"[{line_name}] Clean old data out of dataframe.")
-            all_trips[line_id] = trips
+            all_trips[line_short_id] = trips
 
-        return trips
+        # return trips
         return compute_coords_timestamps(trips, line_name, line_short_id)
 
 
@@ -300,9 +261,9 @@ async def main():
     while True:
         line_short_ids = set(stops.line_short_id)
         # Only select first 5 lines in list for testing
-        line_short_ids = list(line_short_ids)[:5]
+        # line_short_ids = list(line_short_ids)[:5]
 
-        arrival_times = await asyncio.gather(*[get_line_trips(x) for x in line_short_ids])
+        arrival_times = await asyncio.gather(*[get_line_trips(line_id) for line_id in line_short_ids])
 
         # Once data is retrieved, sleep until next scheduled fetch
         time_to_sleep = get_remaining_time_until_next_fetch()
@@ -311,7 +272,7 @@ async def main():
 
 
 # Run the main coroutine
-# thread = asyncio.run(main())
+thread = asyncio.run(main())
 
 # Test for one line
 line_id = "C01383"  # METRO 13
