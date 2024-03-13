@@ -138,16 +138,13 @@ def rebuild_trip_ids_from_timetable(trips, timetable):
     trips['processed'] = False
     trips['row_id'] = trips.index
 
-    # Get the current date
+    # Get the current date in Paris time zone
     day_of_week = datetime.datetime.now().strftime("%A")
-
-    # Define Paris time zone
     paris_tz = pytz.timezone('CET')
-
     today = datetime.date.today()
     now = datetime.datetime.now(paris_tz)
 
-    # Filter timetable for current day
+    # Filter timetable for current day of week
     timetable = timetable[timetable[day_of_week.lower()] == True]
     tt = timetable.copy()
     print(tt)
@@ -157,84 +154,102 @@ def rebuild_trip_ids_from_timetable(trips, timetable):
     tt['arrival_time'] = tt['arrival_time'].apply(lambda x: GTFS.parse_time(x, tzinfo=paris_tz))
     tt['start_date'] = tt['start_date'].apply(lambda x: GTFS.parse_date(x))
     tt['end_date'] = tt['end_date'].apply(lambda x: GTFS.parse_date(x))
-    print(tt.iloc[0])
+    tt['destination_name'] = tt['trip_headsign']
+    tt['id'] = tt['trip_id']
+    tt['line_short_id'] = tt['route_short_id']
 
-    # Filter on future scheduled trains
+    # Filter on trains of the day
     tt = tt[today >= tt['start_date']]
     tt = tt[today - datetime.timedelta(days=1) <= tt['end_date']]
-    tt = tt[tt['arrival_time'] >= now]
-    print(tt)
+
+    # Filter on trains less than 60 min late
+    tt = tt[tt['arrival_time'] > now - datetime.timedelta(minutes=60)]
 
     # Parse trip destination
     def append_destination(group):
         group['destination_id'] = group['stop_short_id'].iloc[-1]
         return group
-    tt = tt.sort_values(by=['stop_sequence']).groupby('trip_id').apply(append_destination)
-    tt = tt.reset_index(drop=True)
+    tt = tt.sort_values(by=['stop_sequence']).groupby('trip_id').apply(append_destination, include_groups=False)
+    tt = tt.reset_index()
     print(tt)
 
-    # Substract 120 seconds to arrival_time because the timetable is only accurate to the minute
-    # and trains can arrive up to 120 seconds earlier than expected
-    # We'll use search_earliest for matching with real time data
-    tt['search_earliest'] = tt['arrival_time'] - datetime.timedelta(seconds=120)
+    # Get stop name
+    stops_data = trips[['stop_short_id', 'stop_name']].drop_duplicates().set_index('stop_short_id')
+    tt = tt.set_index('stop_short_id').join(stops_data,
+                                            how='left',
+                                            lsuffix='tt_',
+                                            rsuffix='trips_')
+    tt = tt.reset_index()
     print(tt)
 
     # Filter on trains expected within the next 60 minutes
     tt = tt[tt['arrival_time'] < now + datetime.timedelta(minutes=60)]
-    print(tt)
+    print(tt.iloc[0])
+
+    keys_to_keep = [
+        'id',
+        'stop_short_id',
+        'stop_name',
+        'line_short_id',
+        'destination_id',
+        'destination_name',
+        'arrival_time',
+    ]
+
+    return tt[keys_to_keep]
 
     # Iterate over stops from real-time data
-    for stop in set(trips.stop_short_id):
-        print("-------------------")
-        print(f"Processing stop {stop}")
+    # for stop in set(trips.stop_short_id):
+    #     print("-------------------")
+    #     print(f"Processing stop {stop}")
 
-        # Get next scheduled trains for the stop and sort by their arrival time
-        stop_tt_key = ['trip_id', 'destination_id', 'arrival_time', 'search_earliest']
-        stop_tt = tt[tt['stop_short_id'] == stop][stop_tt_key]
-        stop_tt = stop_tt.sort_values(by=['arrival_time'])
-        stop_tt = stop_tt.head(5)
+    #     # Get next scheduled trains for the stop and sort by their arrival time
+    #     stop_tt_key = ['trip_id', 'destination_id', 'arrival_time', 'search_earliest']
+    #     stop_tt = tt[tt['stop_short_id'] == stop][stop_tt_key]
+    #     stop_tt = stop_tt.sort_values(by=['arrival_time'])
+    #     stop_tt = stop_tt.head(5)
 
-        print("\nScheduled trips:")
-        print(stop_tt)
+    #     print("\nScheduled trips:")
+    #     print(stop_tt)
 
-        # Bind scheduled trains with the closest real-time arrivals
-        stop_trips = trips[trips['stop_short_id'] == stop]
-        stop_trips = stop_trips.sort_values(by=['arrival_time'])
+    #     # Bind scheduled trains with the closest real-time arrivals
+    #     stop_trips = trips[trips['stop_short_id'] == stop]
+    #     stop_trips = stop_trips.sort_values(by=['arrival_time'])
 
-        print("\nStop trips:")
-        print(stop_trips)
+    #     print("\nStop trips:")
+    #     print(stop_trips)
 
-        print("\nIterating over timetable at stop...\n")
-        for i, x in stop_tt.iterrows():
-            # Get the first unprocessed real-time data trip 
-            filter = stop_trips['processed'] == False
-            # that is expected after scheduled arrival time
-            filter &= stop_trips['arrival_time'] >= x.search_earliest
-            # for the correct destination
-            filter &= stop_trips['destination_id'] == x.destination_id
+    #     print("\nIterating over timetable at stop...\n")
+    #     for i, x in stop_tt.iterrows():
+    #         # Get the first unprocessed real-time data trip 
+    #         filter = stop_trips['processed'] == False
+    #         # that is expected after scheduled arrival time
+    #         filter &= stop_trips['arrival_time'] >= x.search_earliest
+    #         # for the correct destination
+    #         filter &= stop_trips['destination_id'] == x.destination_id
 
-            if not stop_trips[filter].empty:
-                rt_row_id = stop_trips[filter].iloc[0].row_id
-                print(f"\tFound scheduled trip to {x.destination_id} at index {rt_row_id}")
+    #         if not stop_trips[filter].empty:
+    #             rt_row_id = stop_trips[filter].iloc[0].row_id
+    #             print(f"\tFound scheduled trip to {x.destination_id} at index {rt_row_id}")
 
-                # Replace trip id of real-time data with trip_id from schedule
-                stop_trips.at[rt_row_id, 'processed'] = True
-                trips.at[rt_row_id, 'id'] = x.trip_id
-                trips.at[rt_row_id, 'processed'] = True
+    #             # Replace trip id of real-time data with trip_id from schedule
+    #             stop_trips.at[rt_row_id, 'processed'] = True
+    #             trips.at[rt_row_id, 'id'] = x.trip_id
+    #             trips.at[rt_row_id, 'processed'] = True
 
-                # print(stop_trips)
+    #             # print(stop_trips)
 
-        print("-------------------\n")
+    #     print("-------------------\n")
 
-    return trips
+    # return trips
 
 
 async def get_line_trips(line_short_id):
     tasks = []
 
+    # Get line attributes (name, type, stops)
     stop_short_ids = stops[stops['line_short_id'] == line_short_id].short_id
     stop_short_ids = list(set(stop_short_ids.values))
-
     line_name = network[network['short_id'] == line_short_id].iloc[0]['name']
     transportation_type = network[network['short_id']
                                   == line_short_id].iloc[0]['transportation_type']
@@ -261,7 +276,7 @@ async def get_line_trips(line_short_id):
             timetable_path = os.path.join(timetable_dir, line_short_id)
             timetable = pd.read_parquet(timetable_path)
 
-            # rebuild_trip_ids_from_timetable(trips, timetable)
+            return rebuild_trip_ids_from_timetable(trips, timetable)
             # trips = trips[trips.processed == True]
         
         # Add previous data for lines with trip id. Keep latest data.
@@ -299,8 +314,8 @@ async def main():
 # thread = asyncio.run(main())
 
 # Test for one line
-# line_id = "C01383"  # METRO 13
-line_id = "C01727"  # RER C
+line_id = "C01383"  # METRO 13
+# line_id = "C01727"  # RER C
 # line_id = "C01743"  # RER B
 shortest_paths = gpd.read_parquet(f'data/shortest_paths/{line_id}.parquet')
 t = asyncio.run(get_line_trips(line_id))
