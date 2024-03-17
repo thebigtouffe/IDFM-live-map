@@ -4,12 +4,11 @@ import geopandas as gpd
 import pandas as pd
 import numpy as np
 import asyncio
-import time
-import datetime
-import pytz
+import time, datetime, pytz
 import traceback
 import aiohttp
 from aiolimiter import AsyncLimiter
+import json, gzip
 
 from src.PRIM_API import PRIM_API
 from src.ArrivalTime import ArrivalTime
@@ -36,7 +35,6 @@ logging.info("Loaded stops dataframe.")
 # Dict to store data for trips for each line
 all_trips = {}
 
-
 def get_remaining_time_until_next_fetch():
     # Get the current time
     now = datetime.datetime.now()
@@ -61,7 +59,23 @@ def get_remaining_time_until_next_fetch():
     return remaining_time
 
 
-def compute_coords_timestamps(trips, line_name, line_short_id):
+class NumpyEncoder(json.JSONEncoder):
+    """ Special json encoder for numpy types """
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
+
+
+def compute_coords_timestamps(trips):
+    # Get line attributes
+    line_name = trips.iloc[0]['line_name']
+    line_short_id = trips.iloc[0]['line_short_id']
+
     # Load shortest paths database
     sp = gpd.read_parquet(f'data/shortest_paths/{line_short_id}.parquet')
     sp['stop_short_id_start'] = sp['stop_id_start'].apply(lambda x: Utils.compute_short_id(x))
@@ -72,6 +86,8 @@ def compute_coords_timestamps(trips, line_name, line_short_id):
     trips['time_position'] = list(zip(trips.arrival_time,
                                       trips.stop_short_id,
                                       trips.stop_name))
+    
+    # TODO: remove duplicates in stop sequence
 
     # Get all stops with arrival time for each trip
     groupby_fields = ['id', 'line_short_id', 'name', 'destination_id']
@@ -90,6 +106,9 @@ def compute_coords_timestamps(trips, line_name, line_short_id):
         for i in range(len(tps)-1):
             start_stop_short_id = tps[i][1]
             end_stop_short_id = tps[i+1][1]
+
+            if start_stop_short_id == end_stop_short_id:
+                continue
 
             start_time = tps[i][0].timestamp()
             end_time = tps[i+1][0].timestamp()
@@ -132,7 +151,7 @@ def compute_coords_timestamps(trips, line_name, line_short_id):
                                             axis=1)
     logging.info(f"[{line_name}] Computed coordinates and timestamps.")
 
-    return df
+    return df.drop(columns=['time_position'])
 
 
 def rebuild_trip_ids_from_timetable(trips, timetable):
@@ -142,6 +161,7 @@ def rebuild_trip_ids_from_timetable(trips, timetable):
         'stop_short_id',
         'stop_name',
         'line_short_id',
+        'line_name',
         'destination_id',
         'destination_name',
         'arrival_time',
@@ -192,30 +212,40 @@ def rebuild_trip_ids_from_timetable(trips, timetable):
                                             rsuffix='trips_')
     tt = tt.reset_index()
 
+    # Get line name
+    tt['line_name'] = trips.iloc[0]['line_name']
+
+    # if trips.iloc[0]['line_name'] == "METRO 14":
+    #     print("DEBUG")
+    #     all_trips['debug'] = tt.copy()
+
     # TODO: Use real-time data when trains are delayed
 
     try:
-        return tt[output_keys]
+        if not tt.empty:
+            return tt[output_keys]
+        else:
+            return None
     except Exception as e:
         logging.error(traceback.format_exc())
-        print(trips.iloc[0])
+        print(tt)
 
 
 async def get_line_trips(line_short_id):
     tasks = []
 
     # Get line attributes (name, type, stops)
+    line_name = network[network['short_id'] == line_short_id].iloc[0]['name']
+    transportation_type = network[network['short_id'] == line_short_id].iloc[0]['transportation_type']
     stop_short_ids = stops[stops['line_short_id'] == line_short_id].short_id
     stop_short_ids = list(set(stop_short_ids.values))
-    line_name = network[network['short_id'] == line_short_id].iloc[0]['name']
-    transportation_type = network[network['short_id']
-                                  == line_short_id].iloc[0]['transportation_type']
 
     async with aiohttp.ClientSession() as session:
         # Fetch arrival times at each stop
         for short_id in stop_short_ids:
-            tasks.append(asyncio.ensure_future(
-                prim.get_next_trips_at_stop(short_id, line_short_id, session)))
+            tasks.append(asyncio.ensure_future(prim.get_next_trips_at_stop(short_id,
+                                                                           line_short_id,
+                                                                           session)))
         logging.info(f"[{line_name}] Created async tasks.")
 
         responses = await asyncio.gather(*tasks)
@@ -224,9 +254,11 @@ async def get_line_trips(line_short_id):
         # Generate trips dataframe for the line
         trips = [t for r in responses for t in r if t is not None]
         trips = pd.DataFrame.from_dict(trips)
+        trips['line_name'] = line_name
         logging.info(f"[{line_name}] Generated dataframe with {len(trips)} rows from response.")
 
         if len(trips) == 0:
+            logging.warning(f'[{line_name}] Dataframe trips is empty!')
             return None
 
         # RATP data is not complete for metro and tramway
@@ -253,8 +285,7 @@ async def get_line_trips(line_short_id):
                 logging.info(f"[{line_name}] Clean old data out of dataframe.")
             all_trips[line_short_id] = trips
 
-        # return trips
-        return compute_coords_timestamps(trips, line_name, line_short_id)
+        return trips
 
 
 async def main():
@@ -262,8 +293,28 @@ async def main():
         line_short_ids = set(stops.line_short_id)
         # Only select first 5 lines in list for testing
         # line_short_ids = list(line_short_ids)[:5]
+        
+        try:
+            # Retrieve real-time data for all lines
+            all_lines_trips = await asyncio.gather(*[get_line_trips(line_id) for line_id in line_short_ids])
+            
+            for trips in all_lines_trips:
+                if trips is not None and not trips.empty:
+                    # Get interpolated coordinates/timestamps for line trips
+                    time_positions = compute_coords_timestamps(trips)
 
-        arrival_times = await asyncio.gather(*[get_line_trips(line_id) for line_id in line_short_ids])
+                    # Get line attributes
+                    line_short_id = trips['line_short_id'].iloc[0]
+                    line_name = trips['line_name'].iloc[0]
+            
+                    # Save data to disk as compressed json
+                    filename = f'data/time_positions/{line_short_id}.json.gz'
+                    with gzip.open(filename, 'wt', encoding="utf-8") as file:
+                        json.dump(time_positions.to_dict(), file, cls=NumpyEncoder)
+                        logging.info(f'[{line_name}] Saved data to {filename}.')
+
+        except Exception as e:
+            logging.error(traceback.format_exc())
 
         # Once data is retrieved, sleep until next scheduled fetch
         time_to_sleep = get_remaining_time_until_next_fetch()
