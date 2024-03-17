@@ -308,6 +308,7 @@ async def main():
                     line_name = trips['line_name'].iloc[0]
             
                     # Save data to disk as compressed json
+                    os.makedirs(os.path.join("data", "time_positions"))
                     filename = f'data/time_positions/{line_short_id}.json.gz'
                     with gzip.open(filename, 'wt', encoding="utf-8") as file:
                         json.dump(time_positions.to_dict(), file, cls=NumpyEncoder)
