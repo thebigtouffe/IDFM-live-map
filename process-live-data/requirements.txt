@@ -11,3 +11,4 @@ aiohttp
 ipympl
 aiolimiter
 pyarrow
+tenacity
