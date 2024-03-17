@@ -5,6 +5,7 @@ import shutil
 import logging
 import pytz
 import traceback
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 from src.Line import Line
 from src.Stop import Stop
@@ -160,6 +161,7 @@ class PRIM_API:
             return None
 
 
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(1)) # Retry using tenacity
     async def get_next_trips_at_stop(self, stop_short_id, line_short_id, session):
         # Create URL for the next trips of the stop
         url_arg_stop = urllib.parse.quote(f"STIF:StopPoint:Q:{stop_short_id}:")
