@@ -341,7 +341,7 @@ async def retrieve_next_position(timestamp, frequency):
     def get_next_ts(lst, min_value, max_value):
         for element in lst:
             # Assuming each element is a tuple or a list with at least 2 elements
-            if len(element) >= 2 and element[0] >= min_value and element[0] <= max_value:
+            if len(element) >= 2 and element[0] >= min_value and element[0] < max_value:
                 # Return the first time_position with time between min_value and max_value
                 return element
 
@@ -370,26 +370,29 @@ async def retrieve_next_position(timestamp, frequency):
             json.dump(data, file)
             logging.info(f'Saved data to {filename}.')
 
-def run_get_next_position():
-    frequency = 10
 
-    # Run every 10 seconds
-    while True:
+def run_get_next_position():
+    frequency = 10 # in seconds
+
+    # Run every X seconds
+    while True:    
         # Get the current time
         now = time.time()
-        print('run_get_next_position')
+
+        logging.info('run_get_next_position')
         asyncio.run(retrieve_next_position(now, frequency))
 
         # Sleep until next execution
-        time.sleep(frequency - (time.time() - now))
+        time.sleep((time.time() // frequency + 1) * frequency - time.time())
 
-# Create threads
-thread1 = threading.Thread(target=run_retrieve_data)
-thread2 = threading.Thread(target=run_get_next_position)
+if __name__=='__main__':
+    # Create threads
+    thread1 = threading.Thread(target=run_retrieve_data)
+    thread2 = threading.Thread(target=run_get_next_position)
 
-# Start threads
-thread1.start()
-thread2.start()
+    # Start threads
+    thread1.start()
+    thread2.start()
 
 
 ### DEBUG ###
