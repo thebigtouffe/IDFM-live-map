@@ -4,6 +4,7 @@ import geopandas as gpd
 import pandas as pd
 import numpy as np
 import asyncio
+import threading
 import time, datetime, pytz
 import traceback
 import aiohttp
@@ -33,7 +34,8 @@ stops = gpd.read_parquet('data/stops.parquet')
 logging.info("Loaded stops dataframe.")
 
 # Dict to store data for trips for each line
-all_trips = {}
+trips_last_data = {}
+all_lines_trips = {}
 
 def get_remaining_time_until_next_fetch():
     # Get the current time
@@ -141,17 +143,17 @@ def compute_coords_timestamps(trips):
             # Concatenate timestamps for each segment of the trip
             timestamps = np.concatenate(timestamps)
 
-            return pd.Series([coords, timestamps])
+            return pd.Series([list(zip(list(timestamps), coords))])
         else:
-            return pd.Series([None, None])
+            return pd.Series([None])
 
-    df[['coords', 'timestamps']] = df.apply(lambda x: build_path(x.time_position,
-                                                                 sp,
-                                                                 line_short_id),
+    df['time_position'] = df.apply(lambda x: build_path(x.time_position,
+                                                        sp,
+                                                        line_short_id),
                                             axis=1)
     logging.info(f"[{line_name}] Computed coordinates and timestamps.")
 
-    return df.drop(columns=['time_position'])
+    return df
 
 
 def rebuild_trip_ids_from_timetable(trips, timetable):
@@ -217,7 +219,7 @@ def rebuild_trip_ids_from_timetable(trips, timetable):
 
     # if trips.iloc[0]['line_name'] == "METRO 14":
     #     print("DEBUG")
-    #     all_trips['debug'] = tt.copy()
+    #     trips_last_data['debug'] = tt.copy()
 
     # TODO: Use real-time data when trains are delayed
 
@@ -273,8 +275,8 @@ async def get_line_trips(line_short_id):
         
         # Add previous data for lines with trip id. Keep latest data.
         else:
-            if line_short_id in all_trips.keys():
-                previous_trips = all_trips[line_short_id]
+            if line_short_id in trips_last_data.keys():
+                previous_trips = trips_last_data[line_short_id]
                 trips = pd.concat([trips, previous_trips])
                 trips = trips.sort_values('update_time').drop_duplicates(subset=['id', 'stop_short_id'],
                                                                          keep='last')
@@ -283,48 +285,114 @@ async def get_line_trips(line_short_id):
                 # Clean data older than 2 hours
                 trips = trips[trips['update_time'] >= np.datetime64('now') - np.timedelta64(2, 'h')]
                 logging.info(f"[{line_name}] Clean old data out of dataframe.")
-            all_trips[line_short_id] = trips
+            trips_last_data[line_short_id] = trips
 
         return trips
 
 
-async def main():
-    while True:
-        line_short_ids = set(stops.line_short_id)
-        # Only select first 5 lines in list for testing
-        # line_short_ids = list(line_short_ids)[:5]
+async def retrieve_data():
+    global all_lines_trips
+
+    line_short_ids = set(stops.line_short_id)
+    # Only select first 5 lines in list for testing
+    line_short_ids = list(line_short_ids)[:5]
+    
+    try:
+        # Retrieve real-time data for all lines
+        all_trips = await asyncio.gather(*[get_line_trips(line_id) for line_id in line_short_ids])
         
-        try:
-            # Retrieve real-time data for all lines
-            all_lines_trips = await asyncio.gather(*[get_line_trips(line_id) for line_id in line_short_ids])
-            
-            for trips in all_lines_trips:
-                if trips is not None and not trips.empty:
-                    # Get interpolated coordinates/timestamps for line trips
-                    time_positions = compute_coords_timestamps(trips)
+        for trips in all_trips:
+            if trips is not None and not trips.empty:
+                # Get interpolated coordinates/timestamps for line trips
+                trips = compute_coords_timestamps(trips)
 
-                    # Get line attributes
-                    line_short_id = trips['line_short_id'].iloc[0]
-                    line_name = trips['line_name'].iloc[0]
-            
-                    # Save data to disk as compressed json
-                    os.makedirs(os.path.join("data", "time_positions"))
-                    filename = f'data/time_positions/{line_short_id}.json.gz'
-                    with gzip.open(filename, 'wt', encoding="utf-8") as file:
-                        json.dump(time_positions.to_dict(), file, cls=NumpyEncoder)
-                        logging.info(f'[{line_name}] Saved data to {filename}.')
+                # Get line attributes
+                line_short_id = trips['line_short_id'].iloc[0]
+                
+                # Update all_line_trips
+                all_lines_trips[line_short_id] = trips
+        
+                # # Save data to disk as compressed json
+                # os.makedirs(os.path.join("data", "time_positions"))
+                # filename = f'data/time_positions/{line_short_id}.json.gz'
+                # with gzip.open(filename, 'wt', encoding="utf-8") as file:
+                #     json.dump(time_positions.to_dict(), file, cls=NumpyEncoder)
+                #     logging.info(f'[{line_name}] Saved data to {filename}.')
 
-        except Exception as e:
-            logging.error(traceback.format_exc())
+    except Exception as e:
+        logging.error(traceback.format_exc())
 
-        # Once data is retrieved, sleep until next scheduled fetch
-        time_to_sleep = get_remaining_time_until_next_fetch()
-        logging.info(f"Will sleep {time_to_sleep} seconds until next fetch...")
-        await asyncio.sleep(time_to_sleep)
+    # Once data is retrieved, sleep until next scheduled fetch
+    time_to_sleep = get_remaining_time_until_next_fetch()
+    logging.info(f"Will sleep {time_to_sleep} seconds until next fetch...")
+    await asyncio.sleep(time_to_sleep)
+
+# Define the function that continuously retrieves data
+def run_retrieve_data():
+    while True:
+        asyncio.run(retrieve_data())
 
 
-# Run the main coroutine
-thread = asyncio.run(main())
+async def retrieve_next_position(timestamp, frequency):
+    global all_lines_trips
+
+    data = {}
+
+    def get_next_ts(lst, min_value, max_value):
+        for element in lst:
+            # Assuming each element is a tuple or a list with at least 2 elements
+            if len(element) >= 2 and element[0] >= min_value and element[0] <= max_value:
+                # Return the first time_position with time between min_value and max_value
+                return element
+
+        # Return None if no element meets the condition
+        return None  
+
+    for short_line_id in all_lines_trips:
+        df = all_lines_trips[short_line_id]
+        for i in range(len(df)):
+            line = df.iloc[i].copy()
+            if line.time_position:
+                next_time_position = get_next_ts(line.time_position,
+                                                 timestamp,
+                                                 frequency+timestamp)
+                
+                if next_time_position:
+                    line['time_position'] = next_time_position
+                    line['time_generated'] = timestamp
+                    data[line.id] = line.to_dict()
+
+    # Save data to disk as compressed json
+    if len(data) > 0:
+        filename = 'data/next.json.gz'
+        with gzip.open(filename, 'wt', encoding="utf-8") as file:
+            # json.dump(data, file, cls=NumpyEncoder)
+            json.dump(data, file)
+            logging.info(f'Saved data to {filename}.')
+
+def run_get_next_position():
+    frequency = 10
+
+    # Run every 10 seconds
+    while True:
+        # Get the current time
+        now = time.time()
+        print('run_get_next_position')
+        asyncio.run(retrieve_next_position(now, frequency))
+
+        # Sleep until next execution
+        time.sleep(frequency - (time.time() - now))
+
+# Create threads
+thread1 = threading.Thread(target=run_retrieve_data)
+thread2 = threading.Thread(target=run_get_next_position)
+
+# Start threads
+thread1.start()
+thread2.start()
+
+
+### DEBUG ###
 
 # Test for one line
 line_id = "C01383"  # METRO 13
