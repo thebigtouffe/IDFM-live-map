@@ -123,7 +123,7 @@ class PRIM_API:
 
             # Sometimes data from other lines pollute trips
             if line_short_id != Utils.compute_short_id(line_id):
-                logging.debug(f'Ignoring trip {trip_id} from line {line_id}')
+                # logging.debug(f'Ignoring trip {trip_id} from line {line_id}')
                 return None
 
             destination_id = trip['MonitoredVehicleJourney']['DestinationRef']['value']
