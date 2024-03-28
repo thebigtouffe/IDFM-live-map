@@ -61,16 +61,81 @@ def get_remaining_time_until_next_fetch():
     return remaining_time
 
 
-class NumpyEncoder(json.JSONEncoder):
-    """ Special json encoder for numpy types """
-    def default(self, obj):
-        if isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return json.JSONEncoder.default(self, obj)
+def rebuild_trip_ids_from_timetable(trips, timetable):
+    output_keys = [
+        'id',
+        'name',
+        'stop_short_id',
+        'stop_name',
+        'line_short_id',
+        'line_name',
+        'destination_id',
+        'destination_name',
+        'arrival_time',
+    ]
+
+    # Get the current date in Paris time zone
+    day_of_week = datetime.datetime.now().strftime("%A")
+    paris_tz = pytz.timezone('CET')
+    today = datetime.date.today()
+    now = datetime.datetime.now(paris_tz)
+
+    # Filter timetable for current day of week
+    timetable = timetable[timetable[day_of_week.lower()] == True]
+    tt = timetable.copy()
+
+    # Parse data
+    tt['stop_short_id'] = tt['stop_id'].apply(lambda x: Utils.compute_short_id(x))
+    tt['arrival_time'] = tt['arrival_time'].apply(lambda x: GTFS.parse_time(x, tzinfo=paris_tz))
+    tt['start_date'] = tt['start_date'].apply(lambda x: GTFS.parse_date(x))
+    tt['end_date'] = tt['end_date'].apply(lambda x: GTFS.parse_date(x))
+    tt['destination_name'] = tt['trip_headsign']
+    tt['id'] = tt['trip_id']
+    tt['line_short_id'] = tt['route_short_id']
+    tt['name'] = ''
+
+    # Filter on trains of the day
+    tt = tt[today >= tt['start_date']]
+    tt = tt[today - datetime.timedelta(days=1) <= tt['end_date']]
+
+    # Assuming trains can be up to 2 minutes early
+    tt = tt[tt['arrival_time'] > now - datetime.timedelta(minutes=2)]
+
+    # Filter on trains expected within the next 60 minutes
+    tt = tt[tt['arrival_time'] < now + datetime.timedelta(minutes=60)]
+
+    # Parse trip destination
+    def append_destination(group):
+        group['destination_id'] = group['stop_short_id'].iloc[-1]
+        return group
+    tt = tt.sort_values(by=['stop_sequence']).groupby('trip_id').apply(append_destination, include_groups=False)
+    tt = tt.reset_index()
+
+    # Get stop name from real-time data
+    stops_data = trips[['stop_short_id', 'stop_name']].drop_duplicates().set_index('stop_short_id')
+    tt = tt.set_index('stop_short_id').join(stops_data,
+                                            how='left',
+                                            lsuffix='tt_',
+                                            rsuffix='trips_')
+    tt = tt.reset_index()
+
+    # Get line name
+    tt['line_name'] = trips.iloc[0]['line_name']
+
+    # if trips.iloc[0]['line_name'] == "METRO 14":
+    #     print("DEBUG")
+    #     trips_last_data['debug'] = tt.copy()
+
+    # TODO: Use real-time data when trains are delayed
+
+    try:
+        if not tt.empty:
+            return tt[output_keys]
+        else:
+            return None
+    except Exception as e:
+        logging.error(traceback.format_exc())
+        print(tt)
 
 
 def compute_coords_timestamps(trips):
@@ -150,87 +215,10 @@ def compute_coords_timestamps(trips):
     df['time_position'] = df.apply(lambda x: build_path(x.time_position,
                                                         sp,
                                                         line_short_id),
-                                            axis=1)
+                                   axis=1)
     logging.info(f"[{line_name}] Computed coordinates and timestamps.")
 
     return df
-
-
-def rebuild_trip_ids_from_timetable(trips, timetable):
-    output_keys = [
-        'id',
-        'name',
-        'stop_short_id',
-        'stop_name',
-        'line_short_id',
-        'line_name',
-        'destination_id',
-        'destination_name',
-        'arrival_time',
-    ]
-
-    # Get the current date in Paris time zone
-    day_of_week = datetime.datetime.now().strftime("%A")
-    paris_tz = pytz.timezone('CET')
-    today = datetime.date.today()
-    now = datetime.datetime.now(paris_tz)
-
-    # Filter timetable for current day of week
-    timetable = timetable[timetable[day_of_week.lower()] == True]
-    tt = timetable.copy()
-
-    # Parse data
-    tt['stop_short_id'] = tt['stop_id'].apply(lambda x: Utils.compute_short_id(x))
-    tt['arrival_time'] = tt['arrival_time'].apply(lambda x: GTFS.parse_time(x, tzinfo=paris_tz))
-    tt['start_date'] = tt['start_date'].apply(lambda x: GTFS.parse_date(x))
-    tt['end_date'] = tt['end_date'].apply(lambda x: GTFS.parse_date(x))
-    tt['destination_name'] = tt['trip_headsign']
-    tt['id'] = tt['trip_id']
-    tt['line_short_id'] = tt['route_short_id']
-    tt['name'] = ''
-
-    # Filter on trains of the day
-    tt = tt[today >= tt['start_date']]
-    tt = tt[today - datetime.timedelta(days=1) <= tt['end_date']]
-
-    # Assuming trains can be up to 2 minutes early
-    tt = tt[tt['arrival_time'] > now - datetime.timedelta(minutes=2)]
-
-    # Filter on trains expected within the next 60 minutes
-    tt = tt[tt['arrival_time'] < now + datetime.timedelta(minutes=60)]
-
-    # Parse trip destination
-    def append_destination(group):
-        group['destination_id'] = group['stop_short_id'].iloc[-1]
-        return group
-    tt = tt.sort_values(by=['stop_sequence']).groupby('trip_id').apply(append_destination, include_groups=False)
-    tt = tt.reset_index()
-
-    # Get stop name from real-time data
-    stops_data = trips[['stop_short_id', 'stop_name']].drop_duplicates().set_index('stop_short_id')
-    tt = tt.set_index('stop_short_id').join(stops_data,
-                                            how='left',
-                                            lsuffix='tt_',
-                                            rsuffix='trips_')
-    tt = tt.reset_index()
-
-    # Get line name
-    tt['line_name'] = trips.iloc[0]['line_name']
-
-    # if trips.iloc[0]['line_name'] == "METRO 14":
-    #     print("DEBUG")
-    #     trips_last_data['debug'] = tt.copy()
-
-    # TODO: Use real-time data when trains are delayed
-
-    try:
-        if not tt.empty:
-            return tt[output_keys]
-        else:
-            return None
-    except Exception as e:
-        logging.error(traceback.format_exc())
-        print(tt)
 
 
 async def get_line_trips(line_short_id):
@@ -270,8 +258,8 @@ async def get_line_trips(line_short_id):
             timetable_path = os.path.join(timetable_dir, line_short_id)
             timetable = pd.read_parquet(timetable_path)
 
-            logging.info(f"[{line_name}] Rebuilding trips using train schedule.")
             trips = rebuild_trip_ids_from_timetable(trips, timetable)
+            logging.info(f"[{line_name}] Rebuit trips using schedule.")
         
         # Add previous data for lines with trip id. Keep latest data.
         else:
@@ -311,29 +299,23 @@ async def retrieve_data():
                 
                 # Update all_line_trips
                 all_lines_trips[line_short_id] = trips
-        
-                # # Save data to disk as compressed json
-                # os.makedirs(os.path.join("data", "time_positions"))
-                # filename = f'data/time_positions/{line_short_id}.json.gz'
-                # with gzip.open(filename, 'wt', encoding="utf-8") as file:
-                #     json.dump(time_positions.to_dict(), file, cls=NumpyEncoder)
-                #     logging.info(f'[{line_name}] Saved data to {filename}.')
 
     except Exception as e:
         logging.error(traceback.format_exc())
 
-    # Once data is retrieved, sleep until next scheduled fetch
-    time_to_sleep = get_remaining_time_until_next_fetch()
-    logging.info(f"Will sleep {time_to_sleep} seconds until next fetch...")
-    await asyncio.sleep(time_to_sleep)
 
 # Define the function that continuously retrieves data
 def run_retrieve_data():
     while True:
         asyncio.run(retrieve_data())
 
+        # Once data is retrieved, sleep until next scheduled fetch
+        time_to_sleep = get_remaining_time_until_next_fetch()
+        logging.info(f"Will sleep {time_to_sleep} seconds until next fetch...")
+        time.sleep(time_to_sleep)
 
-async def retrieve_next_position(timestamp, frequency):
+
+async def publish_next_positions(timestamp, frequency):
     global all_lines_trips
 
     data = {}
@@ -366,29 +348,29 @@ async def retrieve_next_position(timestamp, frequency):
     if len(data) > 0:
         filename = 'data/next.json.gz'
         with gzip.open(filename, 'wt', encoding="utf-8") as file:
-            # json.dump(data, file, cls=NumpyEncoder)
             json.dump(data, file)
-            logging.info(f'Saved data to {filename}.')
+            logging.info(f'Saved next positions to {filename}.')
 
 
-def run_get_next_position():
+def run_publish_next_positions():
     frequency = 10 # in seconds
 
-    # Run every X seconds
+    # Run every X seconds so that the UNIX timestamp of the execution is a multiple of frequency
     while True:    
         # Get the current time
         now = time.time()
 
-        logging.info('run_get_next_position')
-        asyncio.run(retrieve_next_position(now, frequency))
+        # Run coroutine
+        asyncio.run(publish_next_positions(now, frequency))
 
         # Sleep until next execution
         time.sleep((time.time() // frequency + 1) * frequency - time.time())
 
+
 if __name__=='__main__':
     # Create threads
     thread1 = threading.Thread(target=run_retrieve_data)
-    thread2 = threading.Thread(target=run_get_next_position)
+    thread2 = threading.Thread(target=run_publish_next_positions)
 
     # Start threads
     thread1.start()
