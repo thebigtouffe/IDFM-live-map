@@ -108,7 +108,7 @@ def rebuild_trip_ids_from_timetable(trips, timetable):
     def append_destination(group):
         group['destination_id'] = group['stop_short_id'].iloc[-1]
         return group
-    tt = tt.sort_values(by=['stop_sequence']).groupby('trip_id').apply(append_destination, include_groups=False)
+    tt = tt.sort_values(by=['stop_sequence']).groupby('trip_id').apply(append_destination)
     tt = tt.reset_index()
 
     # Get stop name from real-time data
