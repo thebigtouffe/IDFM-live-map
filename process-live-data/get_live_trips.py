@@ -105,11 +105,7 @@ def rebuild_trip_ids_from_timetable(trips, timetable):
     tt = tt[tt['arrival_time'] < now + datetime.timedelta(minutes=60)]
 
     # Parse trip destination
-    def append_destination(group):
-        group['destination_id'] = group['stop_short_id'].iloc[-1]
-        return group
-    tt = tt.sort_values(by=['stop_sequence']).groupby('trip_id').apply(append_destination)
-    tt = tt.reset_index()
+    tt['destination_id'] = tt.sort_values(by=['stop_sequence']).groupby('trip_id')['stop_short_id'].transform('last')
 
     # Get stop name from real-time data
     stops_data = trips[['stop_short_id', 'stop_name']].drop_duplicates().set_index('stop_short_id')
